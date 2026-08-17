@@ -9,7 +9,11 @@ import {
 const infrastructure = {
   DATABASE_URL: "postgresql://app:synthetic-password@127.0.0.1:5432/certificate_test",
   REDIS_URL: "redis://:synthetic-password@127.0.0.1:6379/0",
-  SESSION_SECRET: "synthetic-session-secret-at-least-32-bytes"
+  SESSION_SECRET: "synthetic-session-secret-at-least-32-bytes",
+  OBJECT_STORAGE_ENDPOINT: "http://127.0.0.1:9000",
+  OBJECT_STORAGE_BUCKET: "certificate-test-private",
+  OBJECT_STORAGE_ACCESS_KEY: "synthetic-access-key",
+  OBJECT_STORAGE_SECRET_KEY: "synthetic-storage-secret"
 };
 
 describe("environment validation", () => {
@@ -24,6 +28,8 @@ describe("environment validation", () => {
     expect(environment.SESSION_ABSOLUTE_TTL_SECONDS).toBe(28_800);
     expect(environment.BCRYPT_COST).toBe(12);
     expect(environment.ADMIN_MFA_POLICY).toBe("DEFERRED_NON_PRODUCTION");
+    expect(environment.PARTICIPANT_IMPORT_MAX_BYTES).toBe(5 * 1_024 * 1_024);
+    expect(environment.OBJECT_STORAGE_CREATE_BUCKET).toBe(false);
   });
 
   it("applies worker and public web defaults", () => {
@@ -36,6 +42,7 @@ describe("environment validation", () => {
 
     try {
       loadApiEnvironment({
+        ...infrastructure,
         DATABASE_URL: secretValue,
         REDIS_URL: secretValue,
         SESSION_SECRET: "short"

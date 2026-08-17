@@ -3,6 +3,8 @@ import { Pool } from "pg";
 
 import type { Database } from "./types.js";
 
+export type DatabaseClient = Kysely<Database>;
+
 export interface DatabaseConnectionConfig {
   readonly connectionString: string;
   readonly maxConnections: number;
@@ -11,7 +13,7 @@ export interface DatabaseConnectionConfig {
 export const createDatabase = ({
   connectionString,
   maxConnections
-}: DatabaseConnectionConfig): Kysely<Database> =>
+}: DatabaseConnectionConfig): DatabaseClient =>
   new Kysely<Database>({
     dialect: new PostgresDialect({
       pool: new Pool({

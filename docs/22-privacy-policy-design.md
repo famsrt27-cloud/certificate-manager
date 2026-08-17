@@ -40,7 +40,7 @@ Define retention periods by:
 
 Delete temporary processing files automatically.
 
-Participant import source files and staged rows are temporary operational data. They must have an approved maximum retention, automatic cleanup and restricted admin access. Exact retention periods are deployment policy and must be recorded before Phase 8; production is not complete while they are undefined.
+Participant import source files and staged rows are temporary operational data with restricted admin access. Phase 3 deletes source objects immediately after validation staging or terminal validation failure, deletes staged rows immediately after successful import, and automatically cancels/removes awaiting-confirmation or terminal staged data after 168 hours by default. Deployments may shorten this validated retention setting; any Phase 8 production policy change must remain documented and bounded.
 
 If `network_fingerprint` is enabled, it must be a keyed, rotating pseudonymous value rather than a raw IP address. Its purpose, rotation and short retention period must be documented. It must not be used to identify a recipient publicly.
 

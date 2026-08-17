@@ -24,20 +24,20 @@
 - [x] Session-bound CSRF
 - [x] RBAC
 - [x] Organization memberships and scoped roles
-- [ ] Projects
-- [ ] Trainings
-- [ ] Participants
+- [x] Projects
+- [x] Trainings
+- [x] Participants
 - [ ] Templates
 - [ ] Template versions
 - [ ] Certificates
 - [ ] Revoke
 
 ## Certificate
-- [ ] CSV/XLSX import
-- [ ] Validation/preview
-- [ ] Import jobs and staged rows
-- [ ] Queue
-- [ ] Worker
+- [x] CSV/XLSX import
+- [x] Validation/preview
+- [x] Import jobs and staged rows
+- [x] Queue (participant import only)
+- [x] Worker (participant import only)
 - [ ] PDF generation
 - [ ] PDFKit renderer
 - [ ] qrcode generation

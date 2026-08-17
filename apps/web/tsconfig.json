@@ -9,7 +9,7 @@
     "moduleResolution": "Bundler",
     "baseUrl": ".",
     "paths": {
-      "@certificate-platform/contracts": ["../../packages/contracts/dist/index.d.ts"]
+      "@certificate-platform/contracts": ["../../packages/contracts/src/index.ts"]
     },
     "jsx": "preserve",
     "incremental": true,

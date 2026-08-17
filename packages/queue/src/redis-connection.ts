@@ -17,6 +17,18 @@ export const createRedisConnection = ({
     retryStrategy: (attempt) => Math.min(attempt * 100, 2_000)
   });
 
+export const createBullMqRedisConnection = ({
+  url,
+  connectionName
+}: RedisConnectionConfig): Redis =>
+  new Redis(url, {
+    connectionName,
+    lazyConnect: true,
+    enableReadyCheck: true,
+    maxRetriesPerRequest: null,
+    retryStrategy: (attempt) => Math.min(attempt * 100, 2_000)
+  });
+
 export const connectRedis = async (redis: Redis): Promise<void> => {
   if (redis.status === "wait") {
     await redis.connect();

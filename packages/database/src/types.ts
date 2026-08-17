@@ -1,7 +1,9 @@
 import type { ColumnType, Generated, Insertable, Selectable, Updateable } from "kysely";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
-export type DateOnly = ColumnType<string, string, string>;
+export type GeneratedTimestamp = ColumnType<Date, Date | string | undefined, Date | string>;
+export type NullableTimestamp = ColumnType<Date | null, Date | string | null, Date | string | null>;
+export type DateOnly = ColumnType<Date, string, string>;
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type RecordStatus = "ACTIVE" | "INACTIVE" | "ARCHIVED";
 export type CertificateStatus = "DRAFT" | "GENERATING" | "ISSUED" | "AVAILABLE" | "REVOKED" | "ARCHIVED";
@@ -15,8 +17,8 @@ export type TemplateAssetStatus = "QUARANTINED" | "ACTIVE" | "REJECTED" | "ARCHI
 
 interface TimestampedTable {
   id: Generated<string>;
-  created_at: Generated<Timestamp>;
-  updated_at: Generated<Timestamp>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
 }
 
 export interface OrganizationsTable extends TimestampedTable {
@@ -56,7 +58,7 @@ export interface UserSystemRolesTable {
   user_id: string;
   role: RoleCode;
   granted_by_user_id: string | null;
-  granted_at: Generated<Timestamp>;
+  granted_at: GeneratedTimestamp;
 }
 
 export interface MembershipRolesTable {
@@ -64,7 +66,7 @@ export interface MembershipRolesTable {
   organization_id: string;
   role: RoleCode;
   granted_by_user_id: string | null;
-  granted_at: Generated<Timestamp>;
+  granted_at: GeneratedTimestamp;
 }
 
 export interface ProjectsTable extends TimestampedTable {
@@ -109,7 +111,7 @@ export interface TemplateAssetsTable {
   height_px: number | null;
   status: Generated<TemplateAssetStatus>;
   created_by_membership_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: GeneratedTimestamp;
 }
 
 export interface TemplateVersionsTable {
@@ -119,8 +121,8 @@ export interface TemplateVersionsTable {
   version: number;
   definition_json: JsonValue;
   status: Generated<TemplateVersionStatus>;
-  published_at: Timestamp | null;
-  created_at: Generated<Timestamp>;
+  published_at: NullableTimestamp;
+  created_at: GeneratedTimestamp;
 }
 
 export interface TemplateVersionAssetsTable {
@@ -128,7 +130,7 @@ export interface TemplateVersionAssetsTable {
   asset_id: string;
   organization_id: string;
   template_id: string;
-  created_at: Generated<Timestamp>;
+  created_at: GeneratedTimestamp;
 }
 
 export interface JobsTable extends TimestampedTable {
@@ -142,9 +144,9 @@ export interface JobsTable extends TimestampedTable {
   max_attempts: Generated<number>;
   last_error_code: string | null;
   requested_by_membership_id: string;
-  queued_at: Generated<Timestamp>;
-  started_at: Timestamp | null;
-  completed_at: Timestamp | null;
+  queued_at: GeneratedTimestamp;
+  started_at: NullableTimestamp;
+  completed_at: NullableTimestamp;
 }
 
 export interface ParticipantImportJobsTable {
@@ -156,7 +158,7 @@ export interface ParticipantImportJobsTable {
   content_sha256: Uint8Array;
   detected_mime_type: string;
   size_bytes: string;
-  confirmed_at: Timestamp | null;
+  confirmed_at: NullableTimestamp;
 }
 
 export interface ParticipantImportRowsTable {
@@ -169,7 +171,7 @@ export interface ParticipantImportRowsTable {
   status: Generated<ImportRowStatus>;
   validation_errors: JsonValue | null;
   participant_id: string | null;
-  created_at: Generated<Timestamp>;
+  created_at: GeneratedTimestamp;
 }
 
 export interface TrainingParticipantsTable extends TimestampedTable {
@@ -201,8 +203,8 @@ export interface CertificatesTable extends TimestampedTable {
   pdf_content_sha256: Uint8Array | null;
   pdf_size_bytes: string | null;
   pdf_mime_type: string | null;
-  issued_at: Timestamp | null;
-  revoked_at: Timestamp | null;
+  issued_at: NullableTimestamp;
+  revoked_at: NullableTimestamp;
   revocation_reason: string | null;
 }
 
@@ -226,7 +228,7 @@ export interface AuditLogsTable {
   resource_id: string | null;
   request_id: string;
   metadata: JsonValue | null;
-  created_at: Generated<Timestamp>;
+  created_at: GeneratedTimestamp;
 }
 
 export interface VerificationEventsTable {
@@ -236,7 +238,7 @@ export interface VerificationEventsTable {
   result: string;
   request_id: string;
   network_fingerprint: string | null;
-  created_at: Generated<Timestamp>;
+  created_at: GeneratedTimestamp;
 }
 
 export type DownloadEventsTable = VerificationEventsTable;

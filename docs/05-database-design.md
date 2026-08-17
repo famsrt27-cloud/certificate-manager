@@ -51,6 +51,10 @@ The complete signed token is not stored in the database.
 - Confirmed valid rows create/update participants according to the approved deduplication policy and create `training_participants` relationships.
 - Source files and staged rows follow a documented temporary retention policy.
 
+The Phase 3 deduplication policy is organization-scoped and exact: a non-empty normalized `external_reference` identifies at most one import target inside the organization, while a row without an external reference always creates a new participant. Display names are never identity keys. Duplicate references inside one source are invalid. Import and participant-update transactions take an organization/reference advisory lock before lookup/update so concurrent application work cannot create two targets; an already-ambiguous legacy reference fails safely rather than choosing a participant. The canonical schema remains unchanged.
+
+Import source objects are removed after validation staging. Successful confirmation removes staged rows after creating durable participant/training relationships. Jobs left awaiting confirmation and terminal staged data are cancelled/removed after the configured retention window, 168 hours by default.
+
 ## Background jobs
 
 - `jobs` stores shared state, progress, attempts and organization-scoped idempotency keys.

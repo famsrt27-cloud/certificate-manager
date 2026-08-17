@@ -78,6 +78,8 @@ Both API endpoints use the canonical JSON envelope and a server-issued UUID `req
 - Import, generation and other safely retryable creation requests require an `Idempotency-Key` header. Keys are scoped by organization and operation.
 - Sensitive actions create allowlisted, redacted audit events.
 
+All Phase 3 tenant routes require `X-Organization-ID` as an admin tenant selector. It is not authorization evidence: the backend resolves the current session identity, verifies an active membership and required permission for that organization, then scopes every resource query by the verified `organization_id`. Missing/malformed selectors fail validation; selectors for another tenant fail authorization without attempting a UUID-only resource lookup.
+
 ## Admin authentication
 
 Passwords are verified with bcrypt after Zod shape validation and UTF-8 byte-length enforcement. Redis is the authoritative session store. Passwords, cookie/session values and CSRF tokens must never appear in logs or audit metadata.
@@ -160,6 +162,15 @@ Permission: `project:create`
 }
 ```
 
+### Project CRUD
+
+- `GET /api/admin/projects` — `project:read`; cursor-paginated, optional `status` filter.
+- `GET /api/admin/projects/{projectId}` — `project:read`.
+- `PATCH /api/admin/projects/{projectId}` — `project:update`; accepts one or both of `name` and `slug`.
+- `POST /api/admin/projects/{projectId}/archive` — `project:archive`; sets `status` to `ARCHIVED` and is safe to repeat.
+
+Project names are trimmed non-empty strings up to 200 characters. Slugs are lowercase kebab-case up to 100 characters and unique within the active organization. Archived projects cannot be updated or used for new trainings.
+
 Response `201`:
 
 ```json
@@ -194,6 +205,23 @@ Permission: `training:create`
 
 The backend resolves `project_id` only inside the active organization.
 
+### Training CRUD
+
+- `GET /api/admin/trainings` — `training:read`; cursor-paginated, with optional `project_id` and `status` filters.
+- `GET /api/admin/trainings/{trainingId}` — `training:read`.
+- `PATCH /api/admin/trainings/{trainingId}` — `training:update`; accepts at least one mutable training field.
+- `POST /api/admin/trainings/{trainingId}/archive` — `training:archive`; sets `status` to `ARCHIVED` and is safe to repeat.
+
+Names are trimmed non-empty strings up to 200 characters. Codes are 1–100 approved ASCII identifier characters and remain unique per organization/project. Dates use `YYYY-MM-DD`; when both are present, `end_date` cannot precede `start_date`.
+
+### Participant management
+
+- `GET /api/admin/participants` — `participant:read`; cursor-paginated, optionally filtered by an active `training_id` relationship.
+- `GET /api/admin/participants/{participantId}` — `participant:read`.
+- `PATCH /api/admin/participants/{participantId}` — `participant:update`; accepts `display_name` and/or nullable `external_reference`.
+
+The authenticated admin contract may return participant display name and private external reference. It never returns these fields from job summaries or public endpoints. Participants are created only through confirmed imports in Phase 3; there is no direct create endpoint or participant archive permission in the canonical catalog.
+
 ### Create template version
 
 `POST /api/admin/templates/{templateId}/versions`
@@ -221,6 +249,8 @@ Content type: `multipart/form-data`
 Headers: `Idempotency-Key` required
 
 Accept only approved CSV/XLSX formats and size limits. Store the source privately, create a `PARTICIPANT_IMPORT` job and parse/validate asynchronously.
+
+The Phase 3 defaults are 5 MiB, 10,000 data rows and 25 MiB total XLSX uncompressed content. The multipart body contains exactly one `file` part. CSV must be UTF-8; XLSX must be a bounded, non-encrypted OOXML workbook with one worksheet and no external/embedded/formula content. Headers are exactly `display_name` plus optional `external_reference`. Only those normalized fields and allowlisted validation codes are staged or returned.
 
 Response `202`:
 
@@ -255,6 +285,8 @@ Permission: `participant:import`
 Headers: `Idempotency-Key` required
 
 Only a job in `AWAITING_CONFIRMATION` may be confirmed. Confirmation resumes asynchronous processing and creates tenant-safe participant/training relationships. Certificate generation cannot begin before the import succeeds.
+
+Confirmation is PostgreSQL-state-idempotent for the organization/job/operation. A repeated request with the required `Idempotency-Key` returns the current safe job status and cannot create duplicate participants or training relationships. A non-empty `external_reference` is matched exactly within the organization under a transaction lock; missing references create distinct participants and display names are never deduplication keys.
 
 ### Generate certificates
 

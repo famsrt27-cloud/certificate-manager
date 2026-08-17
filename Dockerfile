@@ -17,6 +17,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/queue/package.json packages/queue/package.json
+COPY packages/storage/package.json packages/storage/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY . .

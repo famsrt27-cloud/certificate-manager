@@ -16,6 +16,19 @@ x-server-environment: &server-environment
   LOGIN_RATE_LIMIT_NETWORK_MAX: ${LOGIN_RATE_LIMIT_NETWORK_MAX:-20}
   ADMIN_ALLOWED_ORIGINS: ${ADMIN_ALLOWED_ORIGINS:-http://localhost:3000}
   ADMIN_MFA_POLICY: ${ADMIN_MFA_POLICY:-DEFERRED_NON_PRODUCTION}
+  OBJECT_STORAGE_ENDPOINT: http://minio:9000
+  OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-us-east-1}
+  OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-certificate-platform-private}
+  OBJECT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:-local-minio-admin}
+  OBJECT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-local-minio-change-me}
+  OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+  OBJECT_STORAGE_CREATE_BUCKET: "true"
+  PARTICIPANT_IMPORT_MAX_BYTES: ${PARTICIPANT_IMPORT_MAX_BYTES:-5242880}
+  PARTICIPANT_IMPORT_MAX_ROWS: ${PARTICIPANT_IMPORT_MAX_ROWS:-10000}
+  PARTICIPANT_IMPORT_MAX_UNCOMPRESSED_BYTES: ${PARTICIPANT_IMPORT_MAX_UNCOMPRESSED_BYTES:-26214400}
+  PARTICIPANT_IMPORT_RETENTION_HOURS: ${PARTICIPANT_IMPORT_RETENTION_HOURS:-168}
+  PARTICIPANT_IMPORT_CONCURRENCY: ${PARTICIPANT_IMPORT_CONCURRENCY:-2}
+  BULLMQ_PREFIX: ${BULLMQ_PREFIX:-certificate-platform}
 
 services:
   postgres:
@@ -86,6 +99,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3001/health/ready"]
       interval: 10s
@@ -105,6 +119,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3002/health/ready"]
       interval: 10s

@@ -7,22 +7,25 @@ const root = resolve(import.meta.dirname, "..");
 const read = (path: string): string => readFileSync(resolve(root, path), "utf8");
 
 describe("specification and implemented phase consistency", () => {
-  it("keeps the canonical entry point, API contract and Phase 2 scope explicit", () => {
+  it("keeps the canonical entry point, API contract and Phase 3 scope explicit", () => {
     const manifest = JSON.parse(read("MANIFEST.json")) as {
       canonical_start_file: string;
       canonical_api_contract: string;
       status: string;
       phase_1: { business_features_implemented: boolean; next_phase_authorized: boolean };
       phase_2: { phase_3_started: boolean; next_phase_authorized: boolean };
+      phase_3: { phase_4_started: boolean; next_phase_authorized: boolean };
     };
 
     expect(manifest.canonical_start_file).toBe("CODEX-START-HERE.md");
     expect(manifest.canonical_api_contract).toBe("docs/10-api-contract.md");
-    expect(manifest.status).toBe("phase-2-authentication-rbac-implemented-non-production");
+    expect(manifest.status).toBe("phase-3-project-training-participant-implemented-non-production");
     expect(manifest.phase_1.business_features_implemented).toBe(false);
     expect(manifest.phase_1.next_phase_authorized).toBe(true);
-    expect(manifest.phase_2.phase_3_started).toBe(false);
-    expect(manifest.phase_2.next_phase_authorized).toBe(false);
+    expect(manifest.phase_2.phase_3_started).toBe(true);
+    expect(manifest.phase_2.next_phase_authorized).toBe(true);
+    expect(manifest.phase_3.phase_4_started).toBe(false);
+    expect(manifest.phase_3.next_phase_authorized).toBe(false);
   });
 
   it("keeps the canonical roadmap numbered from Phase 0 through Phase 8", () => {

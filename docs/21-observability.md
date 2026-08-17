@@ -24,6 +24,8 @@ The Phase 1 API and worker health boundaries emit structured JSON logs, generate
 
 Phase 2 adds append-only allowlisted audit actions `AUTH_LOGIN_FAILED`, `AUTH_LOGIN_SUCCEEDED`, `AUTH_LOGOUT`, `AUTH_SESSION_REVOKED` and `AUTHORIZATION_DENIED`. Failed-login metadata contains only a fixed result category. Authorization-denial metadata contains only the required permission and a fixed reason; raw request data, email, network address, cookie/session IDs and CSRF tokens are excluded.
 
+Phase 3 adds allowlisted project/training create, update and archive actions, participant update, and participant-import queued/confirmed actions. These events contain organization, actor membership, action, resource type/UUID and request ID only; file names, storage keys, import rows, display names and external references are excluded. Worker failures expose only stable error codes.
+
 ## Metrics
 
 Track:

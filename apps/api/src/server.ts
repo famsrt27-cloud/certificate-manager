@@ -12,12 +12,17 @@ import {
   checkRedis,
   closeRedis,
   connectRedis,
+  createBullMqRedisConnection,
+  createParticipantImportProducer,
   createRedisConnection
 } from "@certificate-platform/queue";
+import { createPrivateObjectStorage, createS3Client, ensurePrivateBucket } from "@certificate-platform/storage";
 
 import { buildApi } from "./app.js";
 import { createAuthRedisStore } from "./infrastructure/auth-redis-store.js";
 import { AuthenticationService } from "./modules/auth/authentication-service.js";
+import { OrganizationAuthorizationService } from "./modules/auth/organization-authorization-service.js";
+import { PhaseThreeService } from "./modules/phase-three/phase-three-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -28,8 +33,23 @@ const redis = createRedisConnection({
   url: environment.REDIS_URL,
   connectionName: "certificate-platform-api"
 });
+const queueRedis = createBullMqRedisConnection({
+  url: environment.REDIS_URL,
+  connectionName: "certificate-platform-api-participant-import"
+});
 
-await connectRedis(redis);
+await Promise.all([connectRedis(redis), connectRedis(queueRedis)]);
+const s3 = createS3Client({
+  endpoint: environment.OBJECT_STORAGE_ENDPOINT,
+  region: environment.OBJECT_STORAGE_REGION,
+  bucket: environment.OBJECT_STORAGE_BUCKET,
+  accessKeyId: environment.OBJECT_STORAGE_ACCESS_KEY,
+  secretAccessKey: environment.OBJECT_STORAGE_SECRET_KEY,
+  forcePathStyle: environment.OBJECT_STORAGE_FORCE_PATH_STYLE
+});
+await ensurePrivateBucket(s3, environment.OBJECT_STORAGE_BUCKET, environment.OBJECT_STORAGE_CREATE_BUCKET);
+const storage = createPrivateObjectStorage(s3, environment.OBJECT_STORAGE_BUCKET);
+const participantImports = createParticipantImportProducer(queueRedis, environment.BULLMQ_PREFIX);
 const authRedis = createAuthRedisStore(redis);
 const sessions = new RedisSessionStore({
   redis: authRedis,
@@ -68,6 +88,17 @@ const authenticationService = new AuthenticationService({
     })
   }
 });
+const audit = {
+  write: (event: Parameters<typeof insertAuditRecord>[1]) => insertAuditRecord(database, event)
+};
+const authorization = new OrganizationAuthorizationService(authenticationService, audit);
+const phaseThreeService = new PhaseThreeService({
+  database,
+  storage,
+  participantImports,
+  audit,
+  cursorSecret: environment.SESSION_SECRET
+});
 
 const app = buildApi({
   dependencies: {
@@ -79,6 +110,12 @@ const app = buildApi({
   authentication: {
     service: authenticationService,
     absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS
+  },
+  phaseThree: {
+    authentication: authenticationService,
+    authorization,
+    service: phaseThreeService,
+    participantImportMaxBytes: environment.PARTICIPANT_IMPORT_MAX_BYTES
   }
 });
 
@@ -89,7 +126,9 @@ const shutdown = async (signal: string): Promise<void> => {
 
   app.log.info({ signal }, "shutting down");
   await app.close();
-  await Promise.allSettled([closeDatabase(database), closeRedis(redis)]);
+  await participantImports.close();
+  s3.destroy();
+  await Promise.allSettled([closeDatabase(database), closeRedis(redis), closeRedis(queueRedis)]);
 };
 
 process.once("SIGINT", () => void shutdown("SIGINT"));
@@ -99,6 +138,8 @@ try {
   await app.listen({ host: environment.API_HOST, port: environment.API_PORT });
 } catch (error) {
   app.log.fatal({ err: error }, "API startup failed");
-  await Promise.allSettled([closeDatabase(database), closeRedis(redis)]);
+  await participantImports.close().catch(() => undefined);
+  s3.destroy();
+  await Promise.allSettled([closeDatabase(database), closeRedis(redis), closeRedis(queueRedis)]);
   process.exitCode = 1;
 }

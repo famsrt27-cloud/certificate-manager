@@ -26,6 +26,28 @@ const RedisUrlSchema = z.string().superRefine((value, context) => {
   }
 });
 
+const HttpUrlSchema = z.url().refine((value) => {
+  const protocol = new URL(value).protocol;
+  return protocol === "http:" || protocol === "https:";
+}, { message: "must use the http or https protocol" });
+
+const EnvironmentBooleanSchema = z.enum(["true", "false"]).transform((value) => value === "true");
+
+const ObjectStorageEnvironmentSchema = z.object({
+  OBJECT_STORAGE_ENDPOINT: HttpUrlSchema,
+  OBJECT_STORAGE_REGION: z.string().min(1).default("us-east-1"),
+  OBJECT_STORAGE_BUCKET: z.string().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/),
+  OBJECT_STORAGE_ACCESS_KEY: z.string().min(3),
+  OBJECT_STORAGE_SECRET_KEY: z.string().min(8),
+  OBJECT_STORAGE_FORCE_PATH_STYLE: EnvironmentBooleanSchema.default(true),
+  OBJECT_STORAGE_CREATE_BUCKET: EnvironmentBooleanSchema.default(false),
+  PARTICIPANT_IMPORT_MAX_BYTES: z.coerce.number().int().min(1_024).max(20 * 1_024 * 1_024).default(5 * 1_024 * 1_024),
+  PARTICIPANT_IMPORT_MAX_ROWS: z.coerce.number().int().min(1).max(50_000).default(10_000),
+  PARTICIPANT_IMPORT_MAX_UNCOMPRESSED_BYTES: z.coerce.number().int().min(1_024).max(100 * 1_024 * 1_024).default(25 * 1_024 * 1_024),
+  PARTICIPANT_IMPORT_RETENTION_HOURS: z.coerce.number().int().min(1).max(720).default(168),
+  BULLMQ_PREFIX: z.string().regex(/^[a-zA-Z0-9:_-]+$/).default("certificate-platform")
+});
+
 const InfrastructureEnvironmentSchema = z.object({
   NODE_ENV: NodeEnvironmentSchema.default("development"),
   LOG_LEVEL: LogLevelSchema.default("info"),
@@ -69,7 +91,8 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   LOGIN_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(3_600).default(900),
   LOGIN_RATE_LIMIT_ACCOUNT_MAX: z.coerce.number().int().min(1).max(20).default(5),
   LOGIN_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(100).default(20),
-  ADMIN_MFA_POLICY: z.literal("DEFERRED_NON_PRODUCTION").default("DEFERRED_NON_PRODUCTION")
+  ADMIN_MFA_POLICY: z.literal("DEFERRED_NON_PRODUCTION").default("DEFERRED_NON_PRODUCTION"),
+  ...ObjectStorageEnvironmentSchema.shape
 }).superRefine((environment, context) => {
   if (environment.SESSION_ABSOLUTE_TTL_SECONDS < environment.SESSION_IDLE_TTL_SECONDS) {
     context.addIssue({
@@ -98,7 +121,9 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
 
 export const WorkerEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   WORKER_HOST: z.string().min(1).default("0.0.0.0"),
-  WORKER_HEALTH_PORT: PortSchema.default(3_002)
+  WORKER_HEALTH_PORT: PortSchema.default(3_002),
+  PARTICIPANT_IMPORT_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(2),
+  ...ObjectStorageEnvironmentSchema.shape
 });
 
 export const WebPublicEnvironmentSchema = z.object({

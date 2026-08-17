@@ -2,7 +2,7 @@
   "project": "Certificate Management & Public Verification Platform",
   "version": "3.0",
   "artifact_type": "specification",
-  "status": "phase-2-authentication-rbac-implemented-non-production",
+  "status": "phase-3-project-training-participant-implemented-non-production",
   "canonical_start_file": "CODEX-START-HERE.md",
   "canonical_api_contract": "docs/10-api-contract.md",
   "token_strategy": "stateless-signed-token-plus-stateful-certificate-status",
@@ -30,7 +30,14 @@
     "packages": ["packages/auth", "packages/domain"],
     "features": ["bcrypt", "Redis sessions", "CSRF", "RBAC", "tenant scoping", "audit foundation"],
     "production_mfa_gate": true,
-    "phase_3_started": false,
+    "phase_3_started": true,
+    "next_phase_authorized": true
+  },
+  "phase_3": {
+    "implemented_on": "2026-08-18",
+    "packages": ["packages/storage", "packages/contracts", "packages/database", "packages/domain", "packages/queue"],
+    "features": ["project CRUD", "training CRUD", "participant management", "private CSV/XLSX import", "validation preview", "BullMQ confirmation worker"],
+    "phase_4_started": false,
     "next_phase_authorized": false
   },
   "implementation_stack": {

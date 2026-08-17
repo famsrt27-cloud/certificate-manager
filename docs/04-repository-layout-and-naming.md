@@ -2,7 +2,7 @@
 
 ## Status
 
-The Phase 2 implementation adds `auth` and `domain` to the Phase 1 `config`, `contracts`, `database` and `queue` packages. Storage, template, rendering and shared test-fixture packages remain deferred to their roadmap phases.
+The Phase 3 implementation adds the approved `storage` package and participant-import BullMQ contracts to the Phase 2 packages. Template, rendering and shared test-fixture packages remain deferred to their roadmap phases.
 
 ## Package manager and workspace
 

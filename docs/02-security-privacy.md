@@ -70,6 +70,13 @@
 - Arbitrary JavaScript, local file access, path traversal and unrestricted remote resource loading are forbidden.
 - Renderer workers use bounded concurrency and isolated temporary directories that are cleaned after every attempt.
 
+### Phase 3 participant-import operating limits
+
+- Accept `.csv` only with an approved CSV MIME type and valid UTF-8 content; accept `.xlsx` only with the canonical OOXML MIME type and ZIP signature.
+- The default source limit is 5 MiB, validation is limited to 10,000 data rows, and XLSX archives are limited to 1,000 entries and 25 MiB total uncompressed content. Configuration may only select values inside the validated bounds.
+- CSV/XLSX headers contain `display_name` and optionally `external_reference`, with no additional columns. XLSX imports contain one worksheet and reject encrypted archives, unsafe paths, external links, embedded/OLE content and formula/object cells.
+- Source objects use server-generated private keys and are deleted immediately after validation staging or a terminal validation failure. Staged rows are deleted immediately after successful confirmation/import and automatically cancelled/deleted after the configured retention period (168 hours by default).
+
 ## Privacy and data minimization
 
 Required participant data is limited to display name and certificate/training relationships. An external reference is optional and private.

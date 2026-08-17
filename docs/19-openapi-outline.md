@@ -89,6 +89,8 @@ OpenAPI defines `adminSession` as an API-key security scheme in the `__Host-admi
 
 Organization scope is derived from an authorized membership; an identifier alone never grants access.
 
+Phase 3 tenant operations declare the required `X-Organization-ID` header as a selector, not as a security scheme or authorization credential. State-changing operations also declare CSRF, and import commands declare `Idempotency-Key`.
+
 Session and authentication responses use `Cache-Control: no-store`. Cookie/session IDs, passwords and CSRF tokens are marked sensitive and excluded from logs and real examples.
 
 ### Public
@@ -105,7 +107,18 @@ OpenAPI paths must match these `docs/10-api-contract.md` operations exactly:
 - `GET /api/admin/auth/session`
 - `POST /api/admin/auth/logout`
 - `POST /api/admin/projects`
+- `GET /api/admin/projects`
+- `GET /api/admin/projects/{projectId}`
+- `PATCH /api/admin/projects/{projectId}`
+- `POST /api/admin/projects/{projectId}/archive`
 - `POST /api/admin/trainings`
+- `GET /api/admin/trainings`
+- `GET /api/admin/trainings/{trainingId}`
+- `PATCH /api/admin/trainings/{trainingId}`
+- `POST /api/admin/trainings/{trainingId}/archive`
+- `GET /api/admin/participants`
+- `GET /api/admin/participants/{participantId}`
+- `PATCH /api/admin/participants/{participantId}`
 - `POST /api/admin/templates/{templateId}/versions`
 - `POST /api/admin/templates/{templateId}/versions/{versionId}/publish`
 - `POST /api/admin/trainings/{trainingId}/participants/import`
@@ -119,6 +132,8 @@ OpenAPI paths must match these `docs/10-api-contract.md` operations exactly:
 - `POST /api/public/certificates/download`
 
 Additional CRUD operations may be specified before their implementation, but they must follow the same version, envelope, tenant, permission and identifier rules.
+
+The Phase 3 Fastify application serves the generated implemented-operation document at `GET /openapi.json`. Its request/response JSON schemas are derived from the canonical Zod contracts, and it intentionally omits Phase 4+ paths until those phases are implemented.
 
 ## Idempotency
 

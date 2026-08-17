@@ -37,7 +37,7 @@ test("admin can use the login, session and logout UI without browser-stored sess
 
   await expect(page).toHaveURL(/\/admin$/);
   await expect(page.getByRole("heading", { name: "สิทธิ์การเข้าถึงองค์กร" })).toBeVisible();
-  await expect(page.getByText("Synthetic Organization")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Synthetic Organization" })).toBeVisible();
   await page.getByRole("button", { name: "ออกจากระบบ" }).click();
   await expect(page).toHaveURL(/\/admin\/login$/);
 });

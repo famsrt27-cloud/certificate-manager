@@ -29,9 +29,9 @@ Verification Token **ไม่เก็บใน Database** โดยใช้ s
 
 Do not replace or duplicate this stack without an approved ADR.
 
-## Phase 2 authentication and RBAC
+## Phase 3 project, training and participant management
 
-Phase 2 adds bcrypt password handling with the 72-byte UTF-8 guard, Redis opaque sessions, hardened host-only cookies, idle/absolute expiry, session-bound CSRF, distributed login throttling, PostgreSQL-resolved memberships/RBAC, tenant authorization policy and append-only authentication/authorization audit events. Project, training and participant CRUD, templates, PDF generation and public verification remain intentionally absent.
+Phase 3 adds tenant-scoped project/training CRUD, participant read/update, private CSV/XLSX uploads, bounded asynchronous validation, cursor-paginated preview, confirmation, deduplicated participant relationships and temporary-data cleanup. Every admin operation retains the Phase 2 opaque Redis session, CSRF, membership/RBAC and sanitized audit controls. Template building, certificate generation and public verification remain intentionally absent.
 
 From the repository root:
 
@@ -47,7 +47,7 @@ pnpm compose:config
 pnpm db:migrate
 ```
 
-For real infrastructure integration tests, start PostgreSQL and Redis, apply migrations, then set `TEST_DATABASE_URL` and `TEST_REDIS_URL` before `pnpm test:integration`. Production API startup is intentionally blocked until the canonical contract is extended with approved MFA support.
+For real infrastructure integration tests, start PostgreSQL, Redis and MinIO, apply migrations, then set a test-only `TEST_DATABASE_URL` (and `TEST_REDIS_URL` for authentication integration) before `pnpm test:integration`. Production API startup is intentionally blocked until the canonical contract is extended with approved MFA support.
 
 Use `docker compose up -d postgres redis minio` for local infrastructure, then start the applications with `pnpm dev`. API health is available at `/health/live` and `/health/ready`; the worker exposes the same paths on its internal Compose health port (or loopback when started directly for local development).
 

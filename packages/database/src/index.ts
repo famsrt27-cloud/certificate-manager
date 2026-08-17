@@ -1,5 +1,5 @@
 export { checkDatabase, closeDatabase, createDatabase } from "./database.js";
-export type { DatabaseConnectionConfig } from "./database.js";
+export type { DatabaseClient, DatabaseConnectionConfig } from "./database.js";
 export {
   findAuthenticationUser,
   insertAuditRecord,
@@ -9,4 +9,5 @@ export {
   type ResolvedIdentityRecord,
   type ResolvedMembershipRecord
 } from "./authentication-repository.js";
+export * from "./phase-three-repository.js";
 export type * from "./types.js";
