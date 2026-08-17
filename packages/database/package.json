@@ -1,0 +1,25 @@
+{
+  "name": "@certificate-platform/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "migrate": "node --env-file-if-exists=../../.env node_modules/node-pg-migrate/bin/node-pg-migrate.js --migrations-dir migrations up",
+    "migrate:status": "node --env-file-if-exists=../../.env node_modules/node-pg-migrate/bin/node-pg-migrate.js --migrations-dir migrations up --dry-run"
+  },
+  "dependencies": {
+    "kysely": "0.29.5",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "node-pg-migrate": "9.0.0"
+  }
+}

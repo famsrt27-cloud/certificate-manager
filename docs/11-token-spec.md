@@ -1,0 +1,134 @@
+# 11 — Stateless Token Specification
+
+## Decision
+
+Public verification uses a signed stateless verification token. The complete token is never stored in the database. Current certificate status remains stateful and is checked on every verification and download operation.
+
+## Certificate identifiers
+
+Each certificate has two distinct identifiers:
+
+- `certificates.id`: internal UUID, allowed only inside trusted application/admin boundaries
+- `certificates.public_identifier`: globally unique 32-character lowercase hexadecimal value generated from 16 cryptographically random bytes
+
+Only `public_identifier` may be used as a public token subject. It is opaque, non-sequential, immutable and not sufficient for verification without a valid signature. Internal UUIDs must never be encoded into verification or download tokens.
+
+## Verification token
+
+Use a versioned, compact signed token with an explicit protected header and payload. Conceptual protected header:
+
+```json
+{
+  "alg": "HS256",
+  "kid": "key-2026-01",
+  "typ": "CVT"
+}
+```
+
+Conceptual payload:
+
+```json
+{
+  "v": 1,
+  "typ": "certificate-verification",
+  "pcid": "8e0f8e23ef3b9ce8a7cb5f451c71d8f4",
+  "iat": 1786963200
+}
+```
+
+The verification token must not contain:
+
+- internal database UUIDs
+- organization, user, participant or student IDs
+- display name or certificate metadata
+- email, phone, address, date of birth or other PII
+- storage keys
+- permissions, certificate status or revocation state
+
+Signed tokens provide integrity, not confidentiality. All claims must therefore be safe to decode publicly.
+
+## Verification algorithm
+
+1. Enforce token byte-length and structural limits before decoding.
+2. Parse only the supported compact format.
+3. Require the expected `typ`, version and an explicitly allowlisted algorithm.
+4. Resolve `kid` only from the configured verification-key set; never accept an embedded key or key URL.
+5. Verify the signature before using `pcid` in a database query.
+6. Validate `pcid` against the exact lowercase 32-hex format.
+7. Resolve the certificate by `public_identifier` using a parameterized query.
+8. Load current certificate, training, organization and template state as required.
+9. Return only the status-dependent fields allowed by `docs/10-api-contract.md`.
+
+Malformed, invalid-signature and unknown-identifier cases produce the same public error behavior. The implementation must avoid material timing differences where practical.
+
+## Lifetime and replay model
+
+The certificate verification token is stable for the certificate and does not use expiry as a substitute for revocation. It is a bearer capability: anyone possessing it can view the minimal public verification result. Current database state remains authoritative.
+
+A stable token cannot authorize direct storage access. PDF access always requires a separate short-lived download token and a fresh state check.
+
+## Download token
+
+Download authorization uses a separately typed signed token. Conceptual payload:
+
+```json
+{
+  "v": 1,
+  "typ": "certificate-download",
+  "aud": "public-certificate-download",
+  "pcid": "8e0f8e23ef3b9ce8a7cb5f451c71d8f4",
+  "iat": 1786963200,
+  "exp": 1786963260,
+  "jti": "cryptographically-random-token-id"
+}
+```
+
+Rules:
+
+- maximum lifetime is 60 seconds
+- type and audience are mandatory
+- `pcid` is the same separate public identifier, never the internal UUID
+- authorization is valid for one certificate only
+- certificate status is checked when the token is issued and again when redeemed
+- the token is accepted only in the POST body
+- token values are never logged, cached or returned in URLs
+- revocation or archival blocks redemption immediately
+
+The `jti` supports correlation-safe replay controls if the approved implementation requires single use; raw `jti` values must not be logged.
+
+## HMAC and asymmetric signing
+
+The approved MVP decision permits HMAC-SHA-256 for one backend signing authority. The implementation must pin `HS256` rather than trusting the token header and must isolate the shared secret.
+
+If signing and verification later move to different trust domains, adopt an approved asymmetric algorithm through a new ADR and token version. Do not silently accept multiple algorithm families.
+
+## Key rotation
+
+- `kid` is required in the protected header.
+- Maintain one active signing key and an explicitly approved set of previous verification keys.
+- New tokens use only the active key.
+- Removed/compromised keys fail closed.
+- Keys come from the approved secret-management mechanism and are never stored in source or the application database.
+- Rotation, compromise and retirement procedures must be tested before production.
+
+## QR transport
+
+The QR code may encode the public verification page with the token in the URL fragment, for example conceptually:
+
+```text
+https://verify.example/verify#token=<signed-token>
+```
+
+The browser reads the fragment and submits the token by `POST /api/public/verify`. The fragment is not included in the initial HTTP request. The page must use `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, no third-party resources and no token-bearing analytics.
+
+Tokens must not appear in URL paths or query strings.
+
+## Database storage rule
+
+The database stores:
+
+- internal certificate UUID
+- non-secret opaque `public_identifier`
+- current certificate status and rendering metadata
+
+The database does not store the complete verification token or download token in plaintext.

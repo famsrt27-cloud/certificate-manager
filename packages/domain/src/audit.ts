@@ -1,0 +1,28 @@
+export const AUDIT_ACTIONS = [
+  "AUTH_LOGIN_FAILED",
+  "AUTH_LOGIN_SUCCEEDED",
+  "AUTH_LOGOUT",
+  "AUTH_SESSION_REVOKED",
+  "AUTHORIZATION_DENIED"
+] as const;
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+export interface AuditEvent {
+  readonly organizationId: string | null;
+  readonly actorUserId: string | null;
+  readonly actorMembershipId: string | null;
+  readonly action: AuditAction;
+  readonly resourceType: "authentication" | "authorization";
+  readonly resourceId: string | null;
+  readonly requestId: string;
+  readonly metadata:
+    | null
+    | { readonly reason: "INVALID_CREDENTIALS" | "RATE_LIMITED" }
+    | { readonly reason: "AUTHORIZATION_CHANGED" | "USER_INACTIVE" | "SESSION_EXPIRED" }
+    | { readonly reason: "NO_ACTIVE_MEMBERSHIP" | "MISSING_PERMISSION"; readonly permission: string };
+}
+
+export interface AuditWriter {
+  write(event: AuditEvent): Promise<void>;
+}

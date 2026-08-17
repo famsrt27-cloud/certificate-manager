@@ -1,0 +1,13 @@
+**/node_modules
+**/.pnpm-store
+**/.next
+**/dist
+**/coverage
+**/playwright-report
+**/test-results
+**/*.tsbuildinfo
+.env
+.env.*
+.docker-cli
+.git
+*.log
