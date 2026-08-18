@@ -120,7 +120,22 @@ OpenAPI paths must match these `docs/10-api-contract.md` operations exactly:
 - `GET /api/admin/participants/{participantId}`
 - `PATCH /api/admin/participants/{participantId}`
 - `POST /api/admin/templates/{templateId}/versions`
+- `POST /api/admin/templates`
+- `GET /api/admin/templates`
+- `GET /api/admin/templates/{templateId}`
+- `PATCH /api/admin/templates/{templateId}`
+- `POST /api/admin/templates/{templateId}/archive`
+- `GET /api/admin/templates/{templateId}/versions`
+- `GET /api/admin/templates/{templateId}/versions/{versionId}`
+- `PATCH /api/admin/templates/{templateId}/versions/{versionId}`
+- `DELETE /api/admin/templates/{templateId}/versions/{versionId}`
+- `POST /api/admin/templates/{templateId}/versions/{versionId}/preview`
 - `POST /api/admin/templates/{templateId}/versions/{versionId}/publish`
+- `POST /api/admin/templates/{templateId}/versions/{versionId}/archive`
+- `POST /api/admin/templates/{templateId}/assets`
+- `GET /api/admin/templates/{templateId}/assets`
+- `GET /api/admin/templates/{templateId}/assets/{assetId}`
+- `POST /api/admin/templates/{templateId}/assets/{assetId}/archive`
 - `POST /api/admin/trainings/{trainingId}/participants/import`
 - `GET /api/admin/participant-imports/{jobId}`
 - `POST /api/admin/participant-imports/{jobId}/confirm`
@@ -133,7 +148,7 @@ OpenAPI paths must match these `docs/10-api-contract.md` operations exactly:
 
 Additional CRUD operations may be specified before their implementation, but they must follow the same version, envelope, tenant, permission and identifier rules.
 
-The Phase 3 Fastify application serves the generated implemented-operation document at `GET /openapi.json`. Its request/response JSON schemas are derived from the canonical Zod contracts, and it intentionally omits Phase 4+ paths until those phases are implemented.
+The Phase 4 Fastify application serves the generated implemented-operation document at `GET /openapi.json`. Its request/response JSON schemas are derived from the canonical Zod contracts. It includes only implemented template-management operations and intentionally omits Phase 5+ certificate-generation paths.
 
 ## Idempotency
 

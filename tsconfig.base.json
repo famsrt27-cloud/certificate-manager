@@ -25,7 +25,8 @@
       "@certificate-platform/database": ["packages/database/src/index.ts"],
       "@certificate-platform/domain": ["packages/domain/src/index.ts"],
       "@certificate-platform/queue": ["packages/queue/src/index.ts"],
-      "@certificate-platform/storage": ["packages/storage/src/index.ts"]
+      "@certificate-platform/storage": ["packages/storage/src/index.ts"],
+      "@certificate-platform/template-engine": ["packages/template-engine/src/index.ts"]
     }
   }
 }

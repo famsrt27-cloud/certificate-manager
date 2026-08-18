@@ -21,7 +21,8 @@ const nextConfig: NextConfig = {
   }],
   turbopack: {
     resolveAlias: {
-      "@certificate-platform/contracts": "../../packages/contracts/dist/index.js"
+      "@certificate-platform/contracts": "../../packages/contracts/dist/index.js",
+      "@certificate-platform/template-engine": "../../packages/template-engine/dist/index.js"
     }
   }
 };

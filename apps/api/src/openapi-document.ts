@@ -3,7 +3,11 @@ import {
   JobResponseSchema, LoginRequestSchema, LogoutResponseSchema, ParticipantImportInspectResponseSchema,
   ParticipantImportQueuedResponseSchema, ParticipantListResponseSchema, ParticipantResponseSchema,
   ProjectListResponseSchema, ProjectResponseSchema, TrainingListResponseSchema, TrainingResponseSchema,
-  UpdateParticipantRequestSchema, UpdateProjectRequestSchema, UpdateTrainingRequestSchema
+  UpdateParticipantRequestSchema, UpdateProjectRequestSchema, UpdateTrainingRequestSchema,
+  CreateTemplateRequestSchema, CreateTemplateVersionRequestSchema, DeleteDraftVersionResponseSchema,
+  TemplateAssetListResponseSchema, TemplateAssetResponseSchema, TemplateListResponseSchema, TemplatePreviewResponseSchema,
+  TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
+  UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema
 } from "@certificate-platform/contracts";
 import { z } from "zod";
 
@@ -34,7 +38,7 @@ const writeOperation = (permission: string, successSchema: z.ZodType, parameters
 
 export const openApiDocument = {
   openapi: "3.1.0",
-  info: { title: "Certificate Management & Public Verification Platform", version: "3.0" },
+  info: { title: "Certificate Management & Public Verification Platform", version: "4.0" },
   components: { securitySchemes: {
     adminSession: { type: "apiKey", in: "cookie", name: "__Host-admin_session" },
     csrfToken: { type: "apiKey", in: "header", name: "X-CSRF-Token" }
@@ -90,6 +94,50 @@ export const openApiDocument = {
       post: writeOperation("participant:import", ParticipantImportQueuedResponseSchema,
         [pathId("jobId"), idempotencyParameter], undefined, 202)
     },
-    "/api/admin/jobs/{jobId}": { get: readOperation("job:read", JobResponseSchema, [pathId("jobId")]) }
+    "/api/admin/jobs/{jobId}": { get: readOperation("job:read", JobResponseSchema, [pathId("jobId")]) },
+    "/api/admin/templates": {
+      get: readOperation("template:read", TemplateListResponseSchema),
+      post: writeOperation("template:create", TemplateResponseSchema, [], CreateTemplateRequestSchema, 201)
+    },
+    "/api/admin/templates/{templateId}": {
+      get: readOperation("template:read", TemplateResponseSchema, [pathId("templateId")]),
+      patch: writeOperation("template:update", TemplateResponseSchema, [pathId("templateId")], UpdateTemplateRequestSchema)
+    },
+    "/api/admin/templates/{templateId}/archive": {
+      post: writeOperation("template:update", TemplateResponseSchema, [pathId("templateId")])
+    },
+    "/api/admin/templates/{templateId}/versions": {
+      get: readOperation("template:read", TemplateVersionListResponseSchema, [pathId("templateId")]),
+      post: writeOperation("template:create", TemplateVersionResponseSchema, [pathId("templateId")], CreateTemplateVersionRequestSchema, 201)
+    },
+    "/api/admin/templates/{templateId}/versions/{versionId}": {
+      get: readOperation("template:read", TemplateVersionResponseSchema, [pathId("templateId"), pathId("versionId")]),
+      patch: writeOperation("template:update", TemplateVersionResponseSchema, [pathId("templateId"), pathId("versionId")],
+        UpdateTemplateVersionRequestSchema),
+      delete: writeOperation("template:update", DeleteDraftVersionResponseSchema, [pathId("templateId"), pathId("versionId")])
+    },
+    "/api/admin/templates/{templateId}/versions/{versionId}/preview": {
+      post: readOperation("template:read", TemplatePreviewResponseSchema, [pathId("templateId"), pathId("versionId")])
+    },
+    "/api/admin/templates/{templateId}/versions/{versionId}/publish": {
+      post: writeOperation("template:publish", TemplateVersionResponseSchema, [pathId("templateId"), pathId("versionId")])
+    },
+    "/api/admin/templates/{templateId}/versions/{versionId}/archive": {
+      post: writeOperation("template:publish", TemplateVersionResponseSchema, [pathId("templateId"), pathId("versionId")])
+    },
+    "/api/admin/templates/{templateId}/assets": {
+      get: readOperation("template:read", TemplateAssetListResponseSchema, [pathId("templateId")]),
+      post: {
+        ...writeOperation("template:asset:create", TemplateAssetResponseSchema, [pathId("templateId")], undefined, 201),
+        requestBody: { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["file"],
+          properties: { file: { type: "string", format: "binary" } }, additionalProperties: false } } } }
+      }
+    },
+    "/api/admin/templates/{templateId}/assets/{assetId}": {
+      get: readOperation("template:read", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
+    },
+    "/api/admin/templates/{templateId}/assets/{assetId}/archive": {
+      post: writeOperation("template:asset:create", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
+    }
   }
 } as const;

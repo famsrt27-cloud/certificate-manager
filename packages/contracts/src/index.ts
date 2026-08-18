@@ -26,3 +26,4 @@ export {
   type LogoutResponse
 } from "./authentication.js";
 export * from "./phase-three.js";
+export * from "./phase-four.js";

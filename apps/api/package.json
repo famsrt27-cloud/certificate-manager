@@ -17,9 +17,11 @@
     "@certificate-platform/domain": "workspace:*",
     "@certificate-platform/queue": "workspace:*",
     "@certificate-platform/storage": "workspace:*",
+    "@certificate-platform/template-engine": "workspace:*",
     "@fastify/multipart": "10.1.1",
     "fastify": "5.12.0",
     "pino": "10.3.1",
+    "sharp": "0.35.3",
     "ioredis": "6.0.0",
     "zod": "4.4.3"
   }

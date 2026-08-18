@@ -77,6 +77,9 @@ importers:
       '@certificate-platform/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@certificate-platform/template-engine':
+        specifier: workspace:*
+        version: link:../../packages/template-engine
       '@fastify/multipart':
         specifier: 10.1.1
         version: 10.1.1
@@ -89,6 +92,9 @@ importers:
       pino:
         specifier: 10.3.1
         version: 10.3.1
+      sharp:
+        specifier: 0.35.3
+        version: 0.35.3(@types/node@26.2.0)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -179,6 +185,9 @@ importers:
 
   packages/contracts:
     dependencies:
+      '@certificate-platform/template-engine':
+        specifier: workspace:*
+        version: link:../template-engine
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -215,6 +224,12 @@ importers:
       '@aws-sdk/client-s3':
         specifier: 3.1111.0
         version: 3.1111.0
+
+  packages/template-engine:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
 packages:
 
@@ -4081,8 +4096,7 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@img/colour@1.1.0':
-    optional: true
+  '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.35.3':
     optionalDependencies:
@@ -6683,7 +6697,6 @@ snapshots:
       '@img/sharp-win32-ia32': 0.35.3
       '@img/sharp-win32-x64': 0.35.3
       '@types/node': 26.2.0
-    optional: true
 
   shebang-command@2.0.0:
     dependencies:

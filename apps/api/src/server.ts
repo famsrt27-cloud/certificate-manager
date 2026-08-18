@@ -23,6 +23,7 @@ import { createAuthRedisStore } from "./infrastructure/auth-redis-store.js";
 import { AuthenticationService } from "./modules/auth/authentication-service.js";
 import { OrganizationAuthorizationService } from "./modules/auth/organization-authorization-service.js";
 import { PhaseThreeService } from "./modules/phase-three/phase-three-service.js";
+import { PhaseFourService } from "./modules/phase-four/phase-four-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -99,6 +100,7 @@ const phaseThreeService = new PhaseThreeService({
   audit,
   cursorSecret: environment.SESSION_SECRET
 });
+const phaseFourService = new PhaseFourService({ database, storage, audit, cursorSecret: environment.SESSION_SECRET });
 
 const app = buildApi({
   dependencies: {
@@ -116,6 +118,12 @@ const app = buildApi({
     authorization,
     service: phaseThreeService,
     participantImportMaxBytes: environment.PARTICIPANT_IMPORT_MAX_BYTES
+  },
+  phaseFour: {
+    authentication: authenticationService,
+    authorization,
+    service: phaseFourService,
+    templateAssetMaxBytes: environment.TEMPLATE_ASSET_MAX_BYTES
   }
 });
 

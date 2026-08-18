@@ -8,9 +8,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "baseUrl": ".",
-    "paths": {
-      "@certificate-platform/contracts": ["../../packages/contracts/src/index.ts"]
-    },
+    "paths": {},
     "jsx": "preserve",
     "incremental": true,
     "plugins": [{ "name": "next" }]

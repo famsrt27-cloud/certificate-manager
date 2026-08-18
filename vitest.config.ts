@@ -12,7 +12,8 @@ export default defineConfig({
       "@certificate-platform/database": fromRoot("./packages/database/src/index.ts"),
       "@certificate-platform/domain": fromRoot("./packages/domain/src/index.ts"),
       "@certificate-platform/queue": fromRoot("./packages/queue/src/index.ts"),
-      "@certificate-platform/storage": fromRoot("./packages/storage/src/index.ts")
+      "@certificate-platform/storage": fromRoot("./packages/storage/src/index.ts"),
+      "@certificate-platform/template-engine": fromRoot("./packages/template-engine/src/index.ts")
     }
   },
   test: {

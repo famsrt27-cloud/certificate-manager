@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { PhaseThreeDashboard } from "./phase-three-dashboard";
+import { TemplateManagement } from "./template-management";
 
 const apiBasePath = process.env.NEXT_PUBLIC_API_BASE_PATH ?? "/api";
 
@@ -74,7 +75,8 @@ export function AdminSession() {
             </select>
           </label>
           {session.memberships.map((membership) => membership.id === activeMembershipId
-            ? <PhaseThreeDashboard csrfToken={session.csrf_token} key={membership.id} membership={membership} /> : null)}
+            ? <div className="space-y-8" key={membership.id}><PhaseThreeDashboard csrfToken={session.csrf_token} membership={membership} />
+              <TemplateManagement csrfToken={session.csrf_token} membership={membership} /></div> : null)}
         </div>
       )}
     </section>

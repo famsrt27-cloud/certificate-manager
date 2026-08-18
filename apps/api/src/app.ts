@@ -9,6 +9,7 @@ import { openApiDocument } from "./openapi-document.js";
 import { registerHealthRoutes, type ReadinessDependencies } from "./routes/health.js";
 import { registerAdminAuthRoutes, type AdminAuthRouteOptions } from "./routes/admin-auth.js";
 import { registerAdminPhaseThreeRoutes, type AdminPhaseThreeRouteOptions } from "./routes/admin-phase-three.js";
+import { registerAdminPhaseFourRoutes, type AdminPhaseFourRouteOptions } from "./routes/admin-phase-four.js";
 
 export interface BuildApiOptions {
   readonly dependencies: ReadinessDependencies;
@@ -17,6 +18,7 @@ export interface BuildApiOptions {
   readonly logger?: boolean;
   readonly authentication?: AdminAuthRouteOptions;
   readonly phaseThree?: AdminPhaseThreeRouteOptions;
+  readonly phaseFour?: AdminPhaseFourRouteOptions;
 }
 
 export const buildApi = ({
@@ -25,7 +27,8 @@ export const buildApi = ({
   logLevel = "info",
   logger = true,
   authentication,
-  phaseThree
+  phaseThree,
+  phaseFour
 }: BuildApiOptions): FastifyInstance => {
   const app = Fastify({
     genReqId: () => randomUUID(),
@@ -42,12 +45,15 @@ export const buildApi = ({
   app.get("/openapi.json", async (_request, reply) => reply.header("cache-control", "no-store").send(openApiDocument));
   registerHealthRoutes(app, dependencies, readinessTimeoutMs);
   if (authentication !== undefined) registerAdminAuthRoutes(app, authentication);
-  if (phaseThree !== undefined) {
+  if (phaseThree !== undefined || phaseFour !== undefined) {
     void app.register(multipart, {
-      limits: { fileSize: phaseThree.participantImportMaxBytes, files: 1, fields: 0, parts: 1 },
+      limits: { fileSize: Math.max(phaseThree?.participantImportMaxBytes ?? 0, phaseFour?.templateAssetMaxBytes ?? 0), files: 1, fields: 0, parts: 1 },
       throwFileSizeLimit: true
     });
+  }
+  if (phaseThree !== undefined) {
     registerAdminPhaseThreeRoutes(app, phaseThree);
   }
+  if (phaseFour !== undefined) registerAdminPhaseFourRoutes(app, phaseFour);
   return app;
 };

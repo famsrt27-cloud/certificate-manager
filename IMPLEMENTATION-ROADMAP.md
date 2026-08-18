@@ -21,10 +21,12 @@ Status: Implemented on 2026-08-18 for non-production environments. Production st
 ## Phase 3 — Project, Training and Participant
 Authorized CRUD, participant import, validation, preview and import jobs.
 
-Status: Implemented on 2026-08-18. The Phase 2 production MFA startup gate remains in force; Phase 4 has not started.
+Status: Implemented on 2026-08-18. The Phase 2 production MFA startup gate remains in force; Phase 4 status is recorded separately below.
 
 ## Phase 4 — Template Builder
 Builder, validated assets, versions, preview and immutable publish.
+
+Status: Implemented on 2026-08-18 for template management only. This phase intentionally excludes PDF generation, certificate issuance and all Phase 5 work. PostgreSQL integration execution remains environment-gated on a provisioned `TEST_DATABASE_URL`.
 
 ## Phase 5 — Certificate Generation
 Generation queue, workers, PDF, storage, QR.

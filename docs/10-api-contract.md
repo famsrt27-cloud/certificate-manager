@@ -222,6 +222,28 @@ Names are trimmed non-empty strings up to 200 characters. Codes are 1–100 appr
 
 The authenticated admin contract may return participant display name and private external reference. It never returns these fields from job summaries or public endpoints. Participants are created only through confirmed imports in Phase 3; there is no direct create endpoint or participant archive permission in the canonical catalog.
 
+### Template management
+
+All template operations require the canonical admin session and `X-Organization-ID`; state-changing operations also require Origin and CSRF validation. Resource queries are scoped by both `organization_id` and the resource identifier.
+
+- `POST /api/admin/templates` — `template:create`; creates an active template shell.
+- `GET /api/admin/templates` — `template:read`; cursor-paginated.
+- `GET /api/admin/templates/{templateId}` — `template:read`.
+- `PATCH /api/admin/templates/{templateId}` — `template:update`; renames a non-archived template.
+- `POST /api/admin/templates/{templateId}/archive` — `template:update`; archives the template shell without deleting historical versions or assets.
+- `GET /api/admin/templates/{templateId}/versions` — `template:read`.
+- `GET /api/admin/templates/{templateId}/versions/{versionId}` — `template:read`.
+- `PATCH /api/admin/templates/{templateId}/versions/{versionId}` — `template:update`; replaces only a `DRAFT` definition and its derived asset links.
+- `DELETE /api/admin/templates/{templateId}/versions/{versionId}` — `template:update`; deletes only a `DRAFT` version.
+- `POST /api/admin/templates/{templateId}/versions/{versionId}/preview` — `template:read`; validates the stored definition and active asset set, then returns a synthetic allowlist-bound data preview. It does not render or return a PDF and does not accept recipient data.
+- `POST /api/admin/templates/{templateId}/versions/{versionId}/archive` — `template:publish`; changes only `PUBLISHED` to `ARCHIVED`.
+- `POST /api/admin/templates/{templateId}/assets` — `template:asset:create`; accepts one private multipart PNG, JPEG, TTF or OTF asset.
+- `GET /api/admin/templates/{templateId}/assets` — `template:read`; returns validated metadata without a storage key or URL.
+- `GET /api/admin/templates/{templateId}/assets/{assetId}` — `template:read`.
+- `POST /api/admin/templates/{templateId}/assets/{assetId}/archive` — `template:asset:create`; blocked when a published/archived version depends on the asset.
+
+Template archive, asset archive and version delete are the canonical recoverable lifecycle operations; published rendering inputs are never deleted or overwritten.
+
 ### Create template version
 
 `POST /api/admin/templates/{templateId}/versions`

@@ -10,4 +10,5 @@ export {
   type ResolvedMembershipRecord
 } from "./authentication-repository.js";
 export * from "./phase-three-repository.js";
+export * from "./phase-four-repository.js";
 export type * from "./types.js";

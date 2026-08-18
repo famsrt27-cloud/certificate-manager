@@ -2,7 +2,7 @@
 
 ## Status
 
-The Phase 3 implementation adds the approved `storage` package and participant-import BullMQ contracts to the Phase 2 packages. Template, rendering and shared test-fixture packages remain deferred to their roadmap phases.
+The Phase 4 implementation adds the approved browser-safe `template-engine` package. Certificate rendering and shared test-fixture packages remain deferred to their roadmap phases.
 
 ## Package manager and workspace
 
@@ -76,6 +76,8 @@ apps/worker ────────────→ packages/domain
 ```
 
 Shared packages never import from `apps/*`. `packages/contracts` must remain browser-safe and cannot import database, Redis, bcrypt, queue, storage or signing-key code. Circular workspace dependencies are forbidden.
+
+Phase 4 adds `apps/api -> packages/template-engine` for canonical definition validation and binding, and `packages/contracts -> packages/template-engine` so the same browser-safe Zod definition is used at the wire and UI boundaries. The template engine has no infrastructure or application dependency.
 
 ## TypeScript conventions
 
