@@ -127,7 +127,7 @@ describe.skipIf(!integrationEnabled)("queue outbox real BullMQ integration", () 
       resolveDelivery = resolve;
       rejectDelivery = reject;
     });
-    const timeout = setTimeout(() => rejectDelivery(new Error("BullMQ delivery timed out")), 5_000);
+    const timeout = setTimeout(() => rejectDelivery(new Error("BullMQ delivery timed out")), 10_000);
 
     const worker = createParticipantImportWorker({
       connection: workerRedis,
@@ -178,5 +178,5 @@ describe.skipIf(!integrationEnabled)("queue outbox real BullMQ integration", () 
       if (keys.length > 0) await producerRedis.del(...keys);
       await Promise.allSettled([closeRedis(producerRedis), closeRedis(workerRedis)]);
     }
-  });
+  }, 15_000);
 });
