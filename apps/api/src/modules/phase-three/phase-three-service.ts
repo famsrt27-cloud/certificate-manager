@@ -30,6 +30,21 @@ const isUniqueViolation = (error: unknown): boolean => typeof error === "object"
 const notFound = (): never => { throw new ApplicationError("NOT_FOUND", "The requested resource was not found.", 404); };
 const conflict = (): never => { throw new ApplicationError("CONFLICT", "The requested operation conflicts with existing data.", 409); };
 
+const participantImportRequestFingerprint = (
+  organizationId: string,
+  trainingId: string,
+  contentSha256: Uint8Array
+): string => {
+  const hash = createHash("sha256");
+  hash.update("PARTICIPANT_IMPORT\0");
+  hash.update(organizationId.toLowerCase());
+  hash.update("\0");
+  hash.update(trainingId.toLowerCase());
+  hash.update("\0");
+  hash.update(contentSha256);
+  return hash.digest("hex");
+};
+
 const mapProject = (row: { id: string; name: string; slug: string; status: Project["status"] }): Project => ({
   id: row.id, name: row.name, slug: row.slug, status: row.status
 });
@@ -193,17 +208,28 @@ export class PhaseThreeService {
   async queueParticipantImport(context: TenantAuthorizationContext, input: { trainingId: string; idempotencyKey: string;
     filename: string; declaredMimeType: string; bytes: Uint8Array }, requestId: string) {
     if (context.actorMembershipId === null) throw new ApplicationError("FORBIDDEN", "The requested operation is not permitted.", 403);
+    const upload = validateParticipantImportUpload(input.filename, input.declaredMimeType, input.bytes);
+    const contentSha256 = createHash("sha256").update(input.bytes).digest();
+    const requestFingerprint = participantImportRequestFingerprint(
+      context.organizationId,
+      input.trainingId,
+      contentSha256
+    );
     const existing = await findParticipantImportByIdempotency(this.#database, context.organizationId, input.idempotencyKey);
     if (existing !== undefined) {
+      const existingFingerprint = participantImportRequestFingerprint(
+        context.organizationId,
+        existing.training_id,
+        existing.content_sha256
+      );
+      if (existingFingerprint !== requestFingerprint) conflict();
       if (existing.status === "QUEUED") await this.#enqueue(existing.id, context.organizationId, "VALIDATE");
       if (existing.status === "FAILED" || existing.status === "DEAD_LETTER" || existing.status === "CANCELLED") conflict();
       return { job_id: existing.id, status: existing.status };
     }
-    const upload = validateParticipantImportUpload(input.filename, input.declaredMimeType, input.bytes);
     const jobId = randomUUID();
     const extension = upload.detectedMimeType === "text/csv" ? "csv" : "xlsx";
     const storageKey = `participant-imports/${context.organizationId}/${jobId}/${randomUUID()}.${extension}`;
-    const contentSha256 = createHash("sha256").update(input.bytes).digest();
     await this.#storage.put({ key: storageKey, body: input.bytes, contentType: upload.detectedMimeType,
       contentSha256Hex: contentSha256.toString("hex") });
     let created = false;
@@ -220,6 +246,12 @@ export class PhaseThreeService {
       if (isUniqueViolation(error)) {
         const duplicate = await findParticipantImportByIdempotency(this.#database, context.organizationId, input.idempotencyKey);
         if (duplicate !== undefined) {
+          const duplicateFingerprint = participantImportRequestFingerprint(
+            context.organizationId,
+            duplicate.training_id,
+            duplicate.content_sha256
+          );
+          if (duplicateFingerprint !== requestFingerprint) conflict();
           if (duplicate.status === "QUEUED") await this.#enqueue(duplicate.id, context.organizationId, "VALIDATE");
           if (duplicate.status === "FAILED" || duplicate.status === "DEAD_LETTER" || duplicate.status === "CANCELLED") conflict();
           return { job_id: duplicate.id, status: duplicate.status };

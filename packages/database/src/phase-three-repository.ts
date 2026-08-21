@@ -144,8 +144,15 @@ export interface CreateParticipantImportInput {
 }
 
 export const findParticipantImportByIdempotency = async (database: Kysely<Database>, organizationId: string, idempotencyKey: string) =>
-  database.selectFrom("jobs").select(["id", "status"]).where("organization_id", "=", organizationId)
-    .where("job_type", "=", "PARTICIPANT_IMPORT").where("idempotency_key", "=", idempotencyKey).executeTakeFirst();
+  database.selectFrom("jobs as job")
+    .innerJoin("participant_import_jobs as detail", (join) => join
+      .onRef("detail.job_id", "=", "job.id")
+      .onRef("detail.organization_id", "=", "job.organization_id"))
+    .select(["job.id", "job.status", "detail.training_id", "detail.content_sha256"])
+    .where("job.organization_id", "=", organizationId)
+    .where("job.job_type", "=", "PARTICIPANT_IMPORT")
+    .where("job.idempotency_key", "=", idempotencyKey)
+    .executeTakeFirst();
 
 export const createParticipantImport = async (database: Kysely<Database>, input: CreateParticipantImportInput) =>
   database.transaction().execute(async (transaction) => {

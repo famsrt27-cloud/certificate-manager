@@ -103,4 +103,73 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
     expect(inspected.status).toBe(200);
     expect(JSON.stringify(inspected.body)).not.toContain("source_storage_key");
   });
+
+  it("binds participant-import idempotency keys to the original training and source content under concurrency", async () => {
+    const sameKey = `same-${randomUUID()}`;
+    const sameBytes = Buffer.from("display_name,external_reference\nSame Request,REF-SAME\n");
+    const objectCountBeforeSame = objects.size;
+
+    const [firstSame, secondSame] = await Promise.all([
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", sameKey)
+        .attach("file", sameBytes, { filename: "same.csv", contentType: "text/csv" }),
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", sameKey)
+        .attach("file", sameBytes, { filename: "same-retry.csv", contentType: "text/csv" })
+    ]);
+
+    expect(firstSame.status).toBe(202);
+    expect(secondSame.status).toBe(202);
+    expect(firstSame.body.data.job_id).toBe(secondSame.body.data.job_id);
+    expect(objects.size).toBe(objectCountBeforeSame + 1);
+
+    const changedContent = await admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+      .set("idempotency-key", sameKey)
+      .attach("file", Buffer.from("display_name,external_reference\nChanged Request,REF-CHANGED\n"), {
+        filename: "changed.csv", contentType: "text/csv"
+      });
+    expect(changedContent.status).toBe(409);
+
+    const secondTraining = await admin(request(app.server).post("/api/admin/trainings"))
+      .send({ project_id: projectId, name: "Synthetic Training 2", code: `CODE-${randomUUID()}` });
+    expect(secondTraining.status).toBe(201);
+
+    const changedTraining = await admin(request(app.server)
+      .post(`/api/admin/trainings/${secondTraining.body.data.id}/participants/import`))
+      .set("idempotency-key", sameKey)
+      .attach("file", sameBytes, { filename: "same.csv", contentType: "text/csv" });
+    expect(changedTraining.status).toBe(409);
+
+    const sameRows = await database.selectFrom("jobs").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("job_type", "=", "PARTICIPANT_IMPORT")
+      .where("idempotency_key", "=", sameKey)
+      .execute();
+    expect(sameRows).toHaveLength(1);
+
+    const competingKey = `competing-${randomUUID()}`;
+    const objectCountBeforeCompeting = objects.size;
+    const [left, right] = await Promise.all([
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", competingKey)
+        .attach("file", Buffer.from("display_name\nLeft Winner\n"), {
+          filename: "left.csv", contentType: "text/csv"
+        }),
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", competingKey)
+        .attach("file", Buffer.from("display_name\nRight Winner\n"), {
+          filename: "right.csv", contentType: "text/csv"
+        })
+    ]);
+
+    expect([left.status, right.status].sort()).toEqual([202, 409]);
+    expect(objects.size).toBe(objectCountBeforeCompeting + 1);
+
+    const competingRows = await database.selectFrom("jobs").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("job_type", "=", "PARTICIPANT_IMPORT")
+      .where("idempotency_key", "=", competingKey)
+      .execute();
+    expect(competingRows).toHaveLength(1);
+  });
 });
