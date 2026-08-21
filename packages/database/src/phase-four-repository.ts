@@ -64,28 +64,51 @@ export const archiveTemplate = async (database: Kysely<Database>, organizationId
     .where("organization_id", "=", organizationId).where("id", "=", templateId)
     .returning(["id", "name", "status", "created_at"]).executeTakeFirst();
 
-const replaceVersionAssets = async (transaction: Transaction<Database>, input: {
-  organizationId: string; templateId: string; versionId: string;
-  assetRequirements: readonly { readonly id: string; readonly kind: "IMAGE" | "FONT" }[];
-}): Promise<boolean> => {
-  const assetIds = input.assetRequirements.map((requirement) => requirement.id);
-  if (assetIds.length > 0) {
-    const assets = await transaction.selectFrom("template_assets").select(["id", "detected_mime_type"])
-      .where("organization_id", "=", input.organizationId).where("template_id", "=", input.templateId)
-      .where("id", "in", assetIds).where("status", "=", "ACTIVE").execute();
-    if (assets.length !== assetIds.length || input.assetRequirements.some((requirement) => {
-      const mimeType = assets.find((asset) => asset.id === requirement.id)?.detected_mime_type;
-      return requirement.kind === "IMAGE" ? mimeType !== "image/png" && mimeType !== "image/jpeg"
-        : mimeType !== "font/ttf" && mimeType !== "font/otf";
-    })) return false;
-  }
+interface VersionAssetRequirements {
+  readonly organizationId: string;
+  readonly templateId: string;
+  readonly assetRequirements: readonly { readonly id: string; readonly kind: "IMAGE" | "FONT" }[];
+}
+
+const orderedAssetRequirements = (
+  requirements: VersionAssetRequirements["assetRequirements"]
+) => [...requirements].sort((left, right) => left.id.localeCompare(right.id));
+
+const lockAndValidateVersionAssets = async (
+  transaction: Transaction<Database>,
+  input: VersionAssetRequirements
+): Promise<boolean> => {
+  const requirements = orderedAssetRequirements(input.assetRequirements);
+  if (requirements.length === 0) return true;
+  const assetIds = requirements.map((requirement) => requirement.id);
+  const assets = await transaction.selectFrom("template_assets")
+    .select(["id", "status", "detected_mime_type"])
+    .where("organization_id", "=", input.organizationId)
+    .where("template_id", "=", input.templateId)
+    .where("id", "in", assetIds)
+    .orderBy("id")
+    .forUpdate()
+    .execute();
+  if (assets.length !== requirements.length) return false;
+  return requirements.every((requirement, index) => {
+    const asset = assets[index];
+    if (asset?.id !== requirement.id || asset.status !== "ACTIVE") return false;
+    return requirement.kind === "IMAGE"
+      ? asset.detected_mime_type === "image/png" || asset.detected_mime_type === "image/jpeg"
+      : asset.detected_mime_type === "font/ttf" || asset.detected_mime_type === "font/otf";
+  });
+};
+
+const replaceVersionAssetLinks = async (transaction: Transaction<Database>, input: VersionAssetRequirements & {
+  readonly versionId: string;
+}): Promise<void> => {
+  const assetIds = orderedAssetRequirements(input.assetRequirements).map((requirement) => requirement.id);
   await transaction.deleteFrom("template_version_assets").where("organization_id", "=", input.organizationId)
     .where("template_id", "=", input.templateId).where("template_version_id", "=", input.versionId).execute();
   if (assetIds.length > 0) await transaction.insertInto("template_version_assets").values(assetIds.map((assetId) => ({
     organization_id: input.organizationId, template_id: input.templateId,
     template_version_id: input.versionId, asset_id: assetId
   }))).execute();
-  return true;
 };
 
 export interface CreateTemplateVersionInput {
@@ -104,12 +127,13 @@ export const createTemplateVersionInTransaction = async (
     .where("organization_id", "=", input.organizationId).where("id", "=", input.templateId)
     .where("status", "=", "ACTIVE").executeTakeFirst();
   if (template === undefined) return { outcome: "NOT_FOUND" as const };
+  if (!await lockAndValidateVersionAssets(transaction, input)) return { outcome: "INVALID_ASSET" as const };
   const latest = await transaction.selectFrom("template_versions").select(sql<number>`coalesce(max(version), 0)::int`.as("version"))
     .where("organization_id", "=", input.organizationId).where("template_id", "=", input.templateId).executeTakeFirstOrThrow();
   const version = await transaction.insertInto("template_versions").values({ organization_id: input.organizationId,
     template_id: input.templateId, version: latest.version + 1, definition_json: input.definition })
     .returning(["id", "template_id", "version", "definition_json", "status", "published_at", "created_at"]).executeTakeFirstOrThrow();
-  if (!await replaceVersionAssets(transaction, { ...input, versionId: version.id })) return { outcome: "INVALID_ASSET" as const };
+  await replaceVersionAssetLinks(transaction, { ...input, versionId: version.id });
   return { outcome: "CREATED" as const, version };
 };
 
@@ -156,7 +180,8 @@ export const updateDraftTemplateVersionInTransaction = async (
     .where("organization_id", "=", input.organizationId).where("template_id", "=", input.templateId)
     .where("id", "=", input.versionId).where("status", "=", "DRAFT").forUpdate().executeTakeFirst();
   if (version === undefined) return "NOT_FOUND" as const;
-  if (!await replaceVersionAssets(transaction, { ...input, versionId: input.versionId })) return "INVALID_ASSET" as const;
+  if (!await lockAndValidateVersionAssets(transaction, input)) return "INVALID_ASSET" as const;
+  await replaceVersionAssetLinks(transaction, { ...input, versionId: input.versionId });
   await transaction.updateTable("template_versions").set({ definition_json: input.definition })
     .where("organization_id", "=", input.organizationId).where("id", "=", input.versionId).execute();
   return "UPDATED" as const;
@@ -209,14 +234,26 @@ export const publishTemplateVersionInTransaction = async (
     .where("version.id", "=", input.versionId).forUpdate().executeTakeFirst();
   if (version === undefined) return "NOT_FOUND" as const;
   if (version.status !== "DRAFT" || version.template_status !== "ACTIVE") return "INVALID_STATE" as const;
-  const links = await transaction.selectFrom("template_version_assets as link")
-    .innerJoin("template_assets as asset", (join) => join.onRef("asset.id", "=", "link.asset_id")
-      .onRef("asset.organization_id", "=", "link.organization_id").onRef("asset.template_id", "=", "link.template_id"))
-    .select(["link.asset_id", "asset.status", "asset.detected_mime_type"]).where("link.organization_id", "=", input.organizationId)
-    .where("link.template_id", "=", input.templateId).where("link.template_version_id", "=", input.versionId).execute();
-  const assets = links.map((link) => ({ id: link.asset_id, detectedMimeType: link.detected_mime_type }))
-    .sort((left, right) => left.id.localeCompare(right.id));
-  if (links.some((link) => link.status !== "ACTIVE") || !input.validateDefinition(version.definition_json, assets)) {
+  const links = await transaction.selectFrom("template_version_assets")
+    .select("asset_id")
+    .where("organization_id", "=", input.organizationId)
+    .where("template_id", "=", input.templateId)
+    .where("template_version_id", "=", input.versionId)
+    .orderBy("asset_id")
+    .execute();
+  const assetIds = links.map((link) => link.asset_id);
+  const lockedAssets = assetIds.length === 0 ? [] : await transaction.selectFrom("template_assets")
+    .select(["id", "status", "detected_mime_type"])
+    .where("organization_id", "=", input.organizationId)
+    .where("template_id", "=", input.templateId)
+    .where("id", "in", assetIds)
+    .orderBy("id")
+    .forUpdate()
+    .execute();
+  const assets = lockedAssets.map((asset) => ({ id: asset.id, detectedMimeType: asset.detected_mime_type }));
+  if (lockedAssets.length !== assetIds.length
+    || lockedAssets.some((asset) => asset.status !== "ACTIVE")
+    || !input.validateDefinition(version.definition_json, assets)) {
     return "VALIDATION_FAILED" as const;
   }
   await transaction.updateTable("template_versions").set({ status: "PUBLISHED", published_at: new Date() })
