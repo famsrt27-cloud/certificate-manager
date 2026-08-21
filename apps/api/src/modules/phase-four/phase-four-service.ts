@@ -6,6 +6,7 @@ import type {
 } from "@certificate-platform/contracts";
 import {
   archivePublishedTemplateVersionInTransaction, archiveTemplateAssetInTransaction, archiveTemplateInTransaction,
+  armStorageCleanup, cancelStorageCleanupInTransaction, completeStorageCleanupByKey,
   createTemplateAssetInTransaction, createTemplateInTransaction, createTemplateVersionInTransaction,
   deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateVersion, listTemplateAssets,
   listTemplates, listTemplateVersions, publishTemplateVersionInTransaction, runAuditedTransaction,
@@ -268,9 +269,14 @@ export class PhaseFourService {
     const extension = validated.detectedMimeType === "image/png" ? "png" : validated.detectedMimeType === "image/jpeg" ? "jpg"
       : validated.detectedMimeType === "font/ttf" ? "ttf" : "otf";
     const storageKey = `template-assets/${context.organizationId}/${templateId}/${id}/${randomUUID()}.${extension}`;
-    await this.#storage.put({ key: storageKey, body: input.bytes, contentType: validated.detectedMimeType,
-      contentSha256Hex: contentSha256.toString("hex") });
+    await armStorageCleanup(this.#database, {
+      organizationId: context.organizationId,
+      objectKey: storageKey,
+      notBefore: new Date(Date.now() + 30 * 60 * 1_000)
+    });
     try {
+      await this.#storage.put({ key: storageKey, body: input.bytes, contentType: validated.detectedMimeType,
+        contentSha256Hex: contentSha256.toString("hex") });
       const asset = await runAuditedTransaction(this.#database, async (transaction) => {
         const row = await createTemplateAssetInTransaction(transaction, {
           id, organizationId: context.organizationId, templateId, storageKey,
@@ -279,6 +285,7 @@ export class PhaseFourService {
           membershipId: actorMembershipId
         });
         if (row === undefined) return { result: undefined, audit: null };
+        await cancelStorageCleanupInTransaction(transaction, context.organizationId, storageKey);
         const created = mapAsset(row);
         return {
           result: created,
@@ -287,7 +294,12 @@ export class PhaseFourService {
       });
       return asset === undefined ? notFound() : asset;
     } catch (error) {
-      await this.#storage.delete(storageKey).catch(() => undefined);
+      try {
+        await this.#storage.delete(storageKey);
+        await completeStorageCleanupByKey(this.#database, context.organizationId, storageKey);
+      } catch {
+        // The pre-armed cleanup intent remains durable for the worker reconciler.
+      }
       throw error;
     }
   }

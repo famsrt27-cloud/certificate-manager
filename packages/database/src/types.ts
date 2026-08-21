@@ -174,6 +174,17 @@ export interface QueueOutboxTable {
   created_at: GeneratedTimestamp;
 }
 
+export interface StorageCleanupOutboxTable {
+  id: Generated<string>;
+  organization_id: string;
+  object_key: string;
+  not_before: Timestamp;
+  attempt_count: Generated<number>;
+  last_attempt_at: NullableTimestamp;
+  last_error_code: string | null;
+  created_at: GeneratedTimestamp;
+}
+
 export interface ParticipantImportRowsTable {
   id: Generated<string>;
   organization_id: string;
@@ -275,6 +286,7 @@ export interface Database {
   jobs: JobsTable;
   participant_import_jobs: ParticipantImportJobsTable;
   queue_outbox: QueueOutboxTable;
+  storage_cleanup_outbox: StorageCleanupOutboxTable;
   participant_import_rows: ParticipantImportRowsTable;
   training_participants: TrainingParticipantsTable;
   certificate_generation_jobs: CertificateGenerationJobsTable;

@@ -31,6 +31,7 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
   const otherMembershipId = randomUUID();
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
+  let failStorageDeletes = false;
   let app: ReturnType<typeof buildApi>;
   let service: PhaseFourService;
   let templateId = "";
@@ -65,7 +66,10 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     const storage: PrivateObjectStorage = {
       put: async (input) => { objects.set(input.key, input.body); },
       get: async (key) => objects.get(key) ?? Promise.reject(new Error("missing synthetic object")),
-      delete: async (key) => { objects.delete(key); }
+      delete: async (key) => {
+        if (failStorageDeletes) throw new Error("synthetic storage delete failure");
+        objects.delete(key);
+      }
     };
     const testCursorKey = "synthetic-cursor-fixture-value-at-least-32-bytes";
     service = new PhaseFourService({ database, storage, cursorSecret: testCursorKey });
@@ -135,6 +139,37 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
       .where("original_filename", "=", filename)
       .executeTakeFirst();
     expect(persisted).toBeUndefined();
+  });
+
+  it("keeps a durable cleanup intent when immediate object compensation fails", async () => {
+    const objectCountBefore = objects.size;
+    failStorageDeletes = true;
+    try {
+      await expect(service.uploadAsset({
+        organizationId,
+        actorUserId: userId,
+        actorMembershipId: membershipId,
+        membership: null,
+        superAdmin: false
+      }, templateId, {
+        filename: `durable-cleanup-${randomUUID()}.png`,
+        declaredMimeType: "image/png",
+        bytes: onePixelPng
+      }, "not-a-uuid")).rejects.toBeDefined();
+    } finally {
+      failStorageDeletes = false;
+    }
+
+    expect(objects.size).toBe(objectCountBefore + 1);
+    const cleanup = await database.selectFrom("storage_cleanup_outbox")
+      .select(["id", "object_key"])
+      .where("organization_id", "=", organizationId)
+      .orderBy("created_at", "desc")
+      .executeTakeFirstOrThrow();
+    expect(objects.has(cleanup.object_key)).toBe(true);
+
+    objects.delete(cleanup.object_key);
+    await database.deleteFrom("storage_cleanup_outbox").where("id", "=", cleanup.id).execute();
   });
 
   it("does not persist a ghost draft when version creation references an invalid asset", async () => {

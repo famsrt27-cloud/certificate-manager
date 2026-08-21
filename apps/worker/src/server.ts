@@ -14,6 +14,7 @@ import { createPrivateObjectStorage, createS3Client, ensurePrivateBucket } from 
 import { buildWorkerHealthApp } from "./health-app.js";
 import { ParticipantImportProcessor } from "./processors/participant-import-processor.js";
 import { QueueOutboxDispatcher } from "./queue-outbox-dispatcher.js";
+import { StorageCleanupReconciler } from "./storage-cleanup-reconciler.js";
 
 const environment = loadWorkerEnvironment();
 const database = createDatabase({
@@ -66,6 +67,12 @@ const queueOutboxDispatcher = new QueueOutboxDispatcher({
   retryDelayMs: 5_000,
   reconcileAfterMs: 30_000
 });
+const storageCleanupReconciler = new StorageCleanupReconciler({
+  database,
+  storage,
+  batchSize: 100,
+  retryDelayMs: 30_000
+});
 const cleanupParticipantImports = async (): Promise<void> => {
   const cutoff = new Date(Date.now() - environment.PARTICIPANT_IMPORT_RETENTION_HOURS * 60 * 60 * 1_000);
   const storageKeys = await cleanupExpiredParticipantImports(database, cutoff);
@@ -106,16 +113,38 @@ await dispatchOutbox();
 const queueOutboxDispatchTimer = setInterval(() => void dispatchOutbox(), 1_000);
 queueOutboxDispatchTimer.unref();
 
+let storageCleanupPromise: Promise<void> | null = null;
+const reconcileStorageCleanup = (): Promise<void> => {
+  if (storageCleanupPromise !== null) return storageCleanupPromise;
+  const run = storageCleanupReconciler.runOnce()
+    .then((result) => {
+      if (result.failed > 0) app.log.warn({ result }, "storage cleanup reconciliation completed with failures");
+    })
+    .catch((error: unknown) => {
+      app.log.warn({ err: error }, "storage cleanup reconciliation failed");
+    })
+    .finally(() => {
+      storageCleanupPromise = null;
+    });
+  storageCleanupPromise = run;
+  return run;
+};
+await reconcileStorageCleanup();
+const storageCleanupTimer = setInterval(() => void reconcileStorageCleanup(), 30_000);
+storageCleanupTimer.unref();
+
 let stopping = false;
 const shutdown = async (signal: string): Promise<void> => {
   if (stopping) return;
   stopping = true;
   clearInterval(participantImportCleanupTimer);
   clearInterval(queueOutboxDispatchTimer);
+  clearInterval(storageCleanupTimer);
 
   app.log.info({ signal }, "shutting down");
   await app.close();
   if (dispatchPromise !== null) await dispatchPromise;
+  if (storageCleanupPromise !== null) await storageCleanupPromise;
   await Promise.allSettled([participantImportWorker.close(), participantImports.close()]);
   s3.destroy();
   await Promise.allSettled([
@@ -134,7 +163,9 @@ try {
 } catch (error) {
   app.log.fatal({ err: error }, "worker startup failed");
   clearInterval(queueOutboxDispatchTimer);
+  clearInterval(storageCleanupTimer);
   if (dispatchPromise !== null) await dispatchPromise;
+  if (storageCleanupPromise !== null) await storageCleanupPromise;
   await Promise.allSettled([participantImportWorker.close(), participantImports.close()]);
   s3.destroy();
   await Promise.allSettled([
