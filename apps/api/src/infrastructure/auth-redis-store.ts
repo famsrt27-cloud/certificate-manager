@@ -1,4 +1,4 @@
-import type { AuthRedisStore } from "@certificate-platform/auth";
+import type { SessionRedisStore } from "@certificate-platform/auth";
 import type { Redis } from "ioredis";
 
 const INCREMENT_WITH_EXPIRY_SCRIPT = `
@@ -14,10 +14,14 @@ end
 return {count, ttl}
 `;
 
-export const createAuthRedisStore = (redis: Redis): AuthRedisStore => ({
+export const createAuthRedisStore = (redis: Redis): SessionRedisStore => ({
   get: (key) => redis.get(key),
   setWithExpiry: async (key, value, ttlSeconds) => {
     await redis.set(key, value, "EX", ttlSeconds);
+  },
+  setWithExpiryIfExists: async (key, value, ttlSeconds) => {
+    const result = await redis.set(key, value, "EX", ttlSeconds, "XX");
+    return result === "OK";
   },
   delete: async (key) => {
     await redis.del(key);
