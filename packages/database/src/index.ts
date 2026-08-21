@@ -9,6 +9,7 @@ export {
   type ResolvedIdentityRecord,
   type ResolvedMembershipRecord
 } from "./authentication-repository.js";
+export * from "./audited-transaction.js";
 export * from "./phase-three-repository.js";
 export * from "./phase-four-repository.js";
 export * from "./queue-outbox-repository.js";

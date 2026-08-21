@@ -23,6 +23,7 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
   let app: ReturnType<typeof buildApi>;
+  let service: PhaseThreeService;
   let projectId = "";
   let trainingId = "";
 
@@ -52,10 +53,9 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
       get: async (key) => objects.get(key) ?? Promise.reject(new Error("missing synthetic object")),
       delete: async (key) => { objects.delete(key); }
     };
-    const service = new PhaseThreeService({
+    service = new PhaseThreeService({
       database,
       storage,
-      audit,
       cursorSecret: "synthetic-cursor-secret-at-least-32-bytes"
     });
     app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
@@ -85,6 +85,26 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
     const listed = await request(app.server).get("/api/admin/trainings").set("x-organization-id", organizationId);
     expect(listed.status).toBe(200);
     expect(listed.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: trainingId, project_id: projectId })]));
+  });
+
+  it("rolls back a relational mutation when its audit insert fails", async () => {
+    const slug = `audit-rollback-${randomUUID()}`;
+    await expect(service.createProject({
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    }, {
+      name: "Must Roll Back",
+      slug
+    }, "not-a-uuid")).rejects.toBeDefined();
+
+    const persisted = await database.selectFrom("projects").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("slug", "=", slug)
+      .executeTakeFirst();
+    expect(persisted).toBeUndefined();
   });
 
   it("stores participant import source privately and exposes only a queued job contract", async () => {

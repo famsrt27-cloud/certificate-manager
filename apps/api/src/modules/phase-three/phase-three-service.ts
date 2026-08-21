@@ -6,13 +6,13 @@ import type {
 } from "@certificate-platform/contracts";
 import { ImportRowValidationErrorSchema } from "@certificate-platform/contracts";
 import {
-  archiveProject, archiveTraining, confirmParticipantImport, createParticipantImport, createProject, createTraining,
-  findJob, findParticipant, findParticipantImportByIdempotency, findProject, findTraining,
-  inspectParticipantImport, listParticipants, listProjects, listTrainings,
-  updateParticipant, updateProject, updateTraining,
-  type DatabaseClient
+  archiveProject, archiveTraining, confirmParticipantImportInTransaction, createParticipantImportInTransaction,
+  createProject, createTraining, findJob, findParticipant, findParticipantImportByIdempotency, findProject, findTraining,
+  inspectParticipantImport, listParticipants, listProjects, listTrainings, runAuditedTransaction,
+  updateParticipantInTransaction, updateProject, updateTraining,
+  type DatabaseClient, type NewAuditRecord
 } from "@certificate-platform/database";
-import type { AuditAction, AuditWriter } from "@certificate-platform/domain";
+import type { AuditAction } from "@certificate-platform/domain";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import { z } from "zod";
 
@@ -61,28 +61,29 @@ const mapParticipant = (row: { id: string; display_name: string; external_refere
 export interface PhaseThreeServiceOptions {
   readonly database: DatabaseClient;
   readonly storage: PrivateObjectStorage;
-  readonly audit: AuditWriter;
   readonly cursorSecret: string;
 }
 
 export class PhaseThreeService {
   readonly #database: DatabaseClient;
   readonly #storage: PrivateObjectStorage;
-  readonly #audit: AuditWriter;
   readonly #cursors: CursorCodec;
 
   constructor(options: PhaseThreeServiceOptions) {
     this.#database = options.database;
     this.#storage = options.storage;
-    this.#audit = options.audit;
     this.#cursors = new CursorCodec(options.cursorSecret);
   }
 
   async createProject(context: TenantAuthorizationContext, input: CreateProjectRequest, requestId: string): Promise<Project> {
     try {
-      const project = mapProject(await createProject(this.#database, context.organizationId, input));
-      await this.#writeAudit(context, "PROJECT_CREATED", "project", project.id, requestId);
-      return project;
+      return await runAuditedTransaction(this.#database, async (transaction) => {
+        const project = mapProject(await createProject(transaction, context.organizationId, input));
+        return {
+          result: project,
+          audit: this.#auditRecord(context, "PROJECT_CREATED", "project", project.id, requestId)
+        };
+      });
     } catch (error) {
       if (isUniqueViolation(error)) conflict();
       throw error;
@@ -104,11 +105,16 @@ export class PhaseThreeService {
 
   async updateProject(context: TenantAuthorizationContext, projectId: string, input: UpdateProjectRequest, requestId: string): Promise<Project> {
     try {
-      const row = await updateProject(this.#database, context.organizationId, projectId, input);
-      if (row === undefined) return notFound();
-      const project = mapProject(row);
-      await this.#writeAudit(context, "PROJECT_UPDATED", "project", project.id, requestId);
-      return project;
+      const project = await runAuditedTransaction(this.#database, async (transaction) => {
+        const row = await updateProject(transaction, context.organizationId, projectId, input);
+        if (row === undefined) return { result: undefined, audit: null };
+        const updated = mapProject(row);
+        return {
+          result: updated,
+          audit: this.#auditRecord(context, "PROJECT_UPDATED", "project", updated.id, requestId)
+        };
+      });
+      return project === undefined ? notFound() : project;
     } catch (error) {
       if (isUniqueViolation(error)) conflict();
       throw error;
@@ -116,20 +122,30 @@ export class PhaseThreeService {
   }
 
   async archiveProject(context: TenantAuthorizationContext, projectId: string, requestId: string): Promise<Project> {
-    const row = await archiveProject(this.#database, context.organizationId, projectId);
-    if (row === undefined) return notFound();
-    const project = mapProject(row);
-    await this.#writeAudit(context, "PROJECT_ARCHIVED", "project", project.id, requestId);
-    return project;
+    const project = await runAuditedTransaction(this.#database, async (transaction) => {
+      const row = await archiveProject(transaction, context.organizationId, projectId);
+      if (row === undefined) return { result: undefined, audit: null };
+      const archived = mapProject(row);
+      return {
+        result: archived,
+        audit: this.#auditRecord(context, "PROJECT_ARCHIVED", "project", archived.id, requestId)
+      };
+    });
+    return project === undefined ? notFound() : project;
   }
 
   async createTraining(context: TenantAuthorizationContext, input: CreateTrainingRequest, requestId: string): Promise<Training> {
     try {
-      const row = await createTraining(this.#database, context.organizationId, input);
-      if (row === undefined) return notFound();
-      const training = mapTraining(row);
-      await this.#writeAudit(context, "TRAINING_CREATED", "training", training.id, requestId);
-      return training;
+      const training = await runAuditedTransaction(this.#database, async (transaction) => {
+        const row = await createTraining(transaction, context.organizationId, input);
+        if (row === undefined) return { result: undefined, audit: null };
+        const created = mapTraining(row);
+        return {
+          result: created,
+          audit: this.#auditRecord(context, "TRAINING_CREATED", "training", created.id, requestId)
+        };
+      });
+      return training === undefined ? notFound() : training;
     } catch (error) {
       if (isUniqueViolation(error)) conflict();
       throw error;
@@ -159,11 +175,16 @@ export class PhaseThreeService {
       throw new ApplicationError("VALIDATION_FAILED", "The request could not be processed.", 400);
     }
     try {
-      const row = await updateTraining(this.#database, context.organizationId, trainingId, input);
-      if (row === undefined) return notFound();
-      const training = mapTraining(row);
-      await this.#writeAudit(context, "TRAINING_UPDATED", "training", training.id, requestId);
-      return training;
+      const training = await runAuditedTransaction(this.#database, async (transaction) => {
+        const row = await updateTraining(transaction, context.organizationId, trainingId, input);
+        if (row === undefined) return { result: undefined, audit: null };
+        const updated = mapTraining(row);
+        return {
+          result: updated,
+          audit: this.#auditRecord(context, "TRAINING_UPDATED", "training", updated.id, requestId)
+        };
+      });
+      return training === undefined ? notFound() : training;
     } catch (error) {
       if (isUniqueViolation(error)) conflict();
       throw error;
@@ -171,11 +192,16 @@ export class PhaseThreeService {
   }
 
   async archiveTraining(context: TenantAuthorizationContext, trainingId: string, requestId: string): Promise<Training> {
-    const row = await archiveTraining(this.#database, context.organizationId, trainingId);
-    if (row === undefined) return notFound();
-    const training = mapTraining(row);
-    await this.#writeAudit(context, "TRAINING_ARCHIVED", "training", training.id, requestId);
-    return training;
+    const training = await runAuditedTransaction(this.#database, async (transaction) => {
+      const row = await archiveTraining(transaction, context.organizationId, trainingId);
+      if (row === undefined) return { result: undefined, audit: null };
+      const archived = mapTraining(row);
+      return {
+        result: archived,
+        audit: this.#auditRecord(context, "TRAINING_ARCHIVED", "training", archived.id, requestId)
+      };
+    });
+    return training === undefined ? notFound() : training;
   }
 
   async getParticipant(organizationId: string, participantId: string): Promise<Participant> {
@@ -193,17 +219,25 @@ export class PhaseThreeService {
 
   async updateParticipant(context: TenantAuthorizationContext, participantId: string, input: UpdateParticipantRequest,
     requestId: string): Promise<Participant> {
-    const result = await updateParticipant(this.#database, context.organizationId, participantId, input);
+    const result = await runAuditedTransaction(this.#database, async (transaction) => {
+      const outcome = await updateParticipantInTransaction(transaction, context.organizationId, participantId, input);
+      if (outcome.conflict || outcome.participant === undefined) {
+        return { result: outcome, audit: null };
+      }
+      return {
+        result: outcome,
+        audit: this.#auditRecord(context, "PARTICIPANT_UPDATED", "participant", outcome.participant.id, requestId)
+      };
+    });
     if (result.conflict) conflict();
     if (result.participant === undefined) return notFound();
-    const participant = mapParticipant(result.participant);
-    await this.#writeAudit(context, "PARTICIPANT_UPDATED", "participant", participant.id, requestId);
-    return participant;
+    return mapParticipant(result.participant);
   }
 
   async queueParticipantImport(context: TenantAuthorizationContext, input: { trainingId: string; idempotencyKey: string;
     filename: string; declaredMimeType: string; bytes: Uint8Array }, requestId: string) {
     if (context.actorMembershipId === null) throw new ApplicationError("FORBIDDEN", "The requested operation is not permitted.", 403);
+    const actorMembershipId = context.actorMembershipId;
     const upload = validateParticipantImportUpload(input.filename, input.declaredMimeType, input.bytes);
     const contentSha256 = createHash("sha256").update(input.bytes).digest();
     const requestFingerprint = participantImportRequestFingerprint(
@@ -229,11 +263,19 @@ export class PhaseThreeService {
       contentSha256Hex: contentSha256.toString("hex") });
     let created = false;
     try {
-      created = await createParticipantImport(this.#database, {
-        jobId, organizationId: context.organizationId, trainingId: input.trainingId, idempotencyKey: input.idempotencyKey,
-        requestedByMembershipId: context.actorMembershipId, sourceStorageKey: storageKey,
-        originalFilename: upload.originalFilename, contentSha256, detectedMimeType: upload.detectedMimeType,
-        sizeBytes: input.bytes.byteLength
+      created = await runAuditedTransaction(this.#database, async (transaction) => {
+        const result = await createParticipantImportInTransaction(transaction, {
+          jobId, organizationId: context.organizationId, trainingId: input.trainingId, idempotencyKey: input.idempotencyKey,
+          requestedByMembershipId: actorMembershipId, sourceStorageKey: storageKey,
+          originalFilename: upload.originalFilename, contentSha256, detectedMimeType: upload.detectedMimeType,
+          sizeBytes: input.bytes.byteLength
+        });
+        return {
+          result,
+          audit: result
+            ? this.#auditRecord(context, "PARTICIPANT_IMPORT_QUEUED", "participant_import", jobId, requestId)
+            : null
+        };
       });
       if (!created) return notFound();
     } catch (error) {
@@ -253,7 +295,6 @@ export class PhaseThreeService {
       }
       throw error;
     }
-    await this.#writeAudit(context, "PARTICIPANT_IMPORT_QUEUED", "participant_import", jobId, requestId);
     return { job_id: jobId, status: "QUEUED" as const };
   }
 
@@ -282,12 +323,21 @@ export class PhaseThreeService {
   }
 
   async confirmParticipantImportJob(context: TenantAuthorizationContext, jobId: string, requestId: string) {
-    const outcome = await confirmParticipantImport(this.#database, context.organizationId, jobId);
+    const outcome = await runAuditedTransaction(this.#database, async (transaction) => {
+      const result = await confirmParticipantImportInTransaction(
+        transaction,
+        context.organizationId,
+        jobId
+      );
+      return {
+        result,
+        audit: result === "CONFIRMED"
+          ? this.#auditRecord(context, "PARTICIPANT_IMPORT_CONFIRMED", "participant_import", jobId, requestId)
+          : null
+      };
+    });
     if (outcome === "NOT_FOUND") return notFound();
     if (outcome === "INVALID_STATE" || outcome === "NO_VALID_ROWS") conflict();
-    if (outcome === "CONFIRMED") {
-      await this.#writeAudit(context, "PARTICIPANT_IMPORT_CONFIRMED", "participant_import", jobId, requestId);
-    }
     const current = await findJob(this.#database, context.organizationId, jobId);
     if (current === undefined) return notFound();
     return { job_id: jobId, status: current.status };
@@ -309,9 +359,18 @@ export class PhaseThreeService {
       ? this.#cursors.encode({ organizationId, resource, createdAt: last.created_at, id: last.id }) : null };
   }
 
-  async #writeAudit(context: TenantAuthorizationContext, action: AuditAction,
-    resourceType: "project" | "training" | "participant" | "participant_import", resourceId: string, requestId: string) {
-    await this.#audit.write({ organizationId: context.organizationId, actorUserId: context.actorUserId,
-      actorMembershipId: context.actorMembershipId, action, resourceType, resourceId, requestId, metadata: null });
+  #auditRecord(context: TenantAuthorizationContext, action: AuditAction,
+    resourceType: "project" | "training" | "participant" | "participant_import",
+    resourceId: string, requestId: string): NewAuditRecord {
+    return {
+      organizationId: context.organizationId,
+      actorUserId: context.actorUserId,
+      actorMembershipId: context.actorMembershipId,
+      action,
+      resourceType,
+      resourceId,
+      requestId,
+      metadata: null
+    };
   }
 }

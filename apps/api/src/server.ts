@@ -88,10 +88,9 @@ const authorization = new OrganizationAuthorizationService(authenticationService
 const phaseThreeService = new PhaseThreeService({
   database,
   storage,
-  audit,
   cursorSecret: environment.SESSION_SECRET
 });
-const phaseFourService = new PhaseFourService({ database, storage, audit, cursorSecret: environment.SESSION_SECRET });
+const phaseFourService = new PhaseFourService({ database, storage, cursorSecret: environment.SESSION_SECRET });
 
 const app = buildApi({
   dependencies: {

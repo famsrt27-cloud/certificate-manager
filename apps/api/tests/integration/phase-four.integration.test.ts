@@ -26,6 +26,7 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
   let app: ReturnType<typeof buildApi>;
+  let service: PhaseFourService;
   let templateId = "";
   let assetId = "";
   let versionId = "";
@@ -61,7 +62,7 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
       delete: async (key) => { objects.delete(key); }
     };
     const testCursorKey = "synthetic-cursor-fixture-value-at-least-32-bytes";
-    const service = new PhaseFourService({ database, storage, audit, cursorSecret: testCursorKey });
+    service = new PhaseFourService({ database, storage, cursorSecret: testCursorKey });
     app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
       readinessTimeoutMs: 100, logger: false, phaseFour: { authentication,
         authorization: new OrganizationAuthorizationService(authentication, audit), service, templateAssetMaxBytes: 1_024 * 1_024 } });
@@ -104,6 +105,71 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(published.status).toBe(200);
     expect(published.body.data.status).toBe("PUBLISHED");
     expect(published.body.data.published_at).toBeTruthy();
+  });
+
+  it("rolls back an asset row and removes stored content when its audit insert fails", async () => {
+    const objectCountBefore = objects.size;
+    const filename = `audit-rollback-${randomUUID()}.png`;
+    await expect(service.uploadAsset({
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    }, templateId, {
+      filename,
+      declaredMimeType: "image/png",
+      bytes: onePixelPng
+    }, "not-a-uuid")).rejects.toBeDefined();
+
+    expect(objects.size).toBe(objectCountBefore);
+    const persisted = await database.selectFrom("template_assets").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .where("original_filename", "=", filename)
+      .executeTakeFirst();
+    expect(persisted).toBeUndefined();
+  });
+
+  it("rolls back version creation and publish transition when their audit insert fails", async () => {
+    const context = {
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    } as const;
+    const definition = {
+      format_version: 1 as const,
+      page: { width: 500, height: 300, unit: "px" as const },
+      elements: []
+    };
+
+    const before = await database.selectFrom("template_versions")
+      .select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .executeTakeFirstOrThrow();
+
+    await expect(service.createVersion(context, templateId, { definition }, "not-a-uuid")).rejects.toBeDefined();
+
+    const after = await database.selectFrom("template_versions")
+      .select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .executeTakeFirstOrThrow();
+    expect(Number(after.count)).toBe(Number(before.count));
+
+    const draft = await service.createVersion(context, templateId, { definition }, randomUUID());
+    await expect(service.publishVersion(context, templateId, draft.id, "not-a-uuid")).rejects.toBeDefined();
+
+    const persisted = await database.selectFrom("template_versions")
+      .select(["status", "published_at"])
+      .where("organization_id", "=", organizationId)
+      .where("id", "=", draft.id)
+      .executeTakeFirstOrThrow();
+    expect(persisted.status).toBe("DRAFT");
+    expect(persisted.published_at).toBeNull();
   });
 
   it("enforces tenant isolation even when the actor is a member of both tenants", async () => {
