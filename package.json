@@ -15,7 +15,7 @@
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "vitest run",
     "test:security": "vitest run packages/auth packages/domain packages/queue packages/storage packages/template-engine tests/security apps/api/src/routes/admin-auth.test.ts apps/api/src/modules/phase-three apps/api/src/modules/phase-four apps/worker/src/processors/participant-import-parser.test.ts",
-    "test:integration": "vitest run apps/api/tests/integration apps/worker/tests/integration",
+    "test:integration": "vitest run --no-file-parallelism apps/api/tests/integration apps/worker/tests/integration",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:list": "playwright test --list",

@@ -161,6 +161,30 @@ export interface ParticipantImportJobsTable {
   confirmed_at: NullableTimestamp;
 }
 
+export interface QueueOutboxTable {
+  id: Generated<string>;
+  organization_id: string;
+  message_type: string;
+  deduplication_key: string;
+  payload_json: JsonValue;
+  dispatched_at: NullableTimestamp;
+  attempt_count: Generated<number>;
+  last_attempt_at: NullableTimestamp;
+  last_error_code: string | null;
+  created_at: GeneratedTimestamp;
+}
+
+export interface StorageCleanupOutboxTable {
+  id: Generated<string>;
+  organization_id: string;
+  object_key: string;
+  not_before: Timestamp;
+  attempt_count: Generated<number>;
+  last_attempt_at: NullableTimestamp;
+  last_error_code: string | null;
+  created_at: GeneratedTimestamp;
+}
+
 export interface ParticipantImportRowsTable {
   id: Generated<string>;
   organization_id: string;
@@ -261,6 +285,8 @@ export interface Database {
   template_version_assets: TemplateVersionAssetsTable;
   jobs: JobsTable;
   participant_import_jobs: ParticipantImportJobsTable;
+  queue_outbox: QueueOutboxTable;
+  storage_cleanup_outbox: StorageCleanupOutboxTable;
   participant_import_rows: ParticipantImportRowsTable;
   training_participants: TrainingParticipantsTable;
   certificate_generation_jobs: CertificateGenerationJobsTable;

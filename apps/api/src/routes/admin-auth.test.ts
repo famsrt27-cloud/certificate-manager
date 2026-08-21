@@ -1,4 +1,4 @@
-import { hashPassword, LoginRateLimiter, RedisSessionStore, type AuthRedisStore } from "@certificate-platform/auth";
+import { hashPassword, LoginRateLimiter, RedisSessionStore, type SessionRedisStore } from "@certificate-platform/auth";
 import { AuthenticationResponseSchema, ErrorResponseSchema, LogoutResponseSchema } from "@certificate-platform/contracts";
 import type { AuditEvent, EffectiveIdentity } from "@certificate-platform/domain";
 import request from "supertest";
@@ -7,12 +7,18 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApi } from "../app.js";
 import { AuthenticationService, type IdentityProvider } from "../modules/auth/authentication-service.js";
 
-class MemoryAuthRedis implements AuthRedisStore {
+class MemoryAuthRedis implements SessionRedisStore {
   readonly values = new Map<string, string>();
   readonly counters = new Map<string, number>();
   fail = false;
   async get(key: string): Promise<string | null> { if (this.fail) throw new Error("secret Redis detail"); return this.values.get(key) ?? null; }
   async setWithExpiry(key: string, value: string): Promise<void> { if (this.fail) throw new Error("secret Redis detail"); this.values.set(key, value); }
+  async setWithExpiryIfExists(key: string, value: string): Promise<boolean> {
+    if (this.fail) throw new Error("secret Redis detail");
+    if (!this.values.has(key)) return false;
+    this.values.set(key, value);
+    return true;
+  }
   async delete(key: string): Promise<void> { if (this.fail) throw new Error("secret Redis detail"); this.values.delete(key); this.counters.delete(key); }
   async incrementWithExpiry(key: string): Promise<{ count: number; ttlSeconds: number }> {
     if (this.fail) throw new Error("secret Redis detail");

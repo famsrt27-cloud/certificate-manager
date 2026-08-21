@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { closeDatabase, createDatabase, insertAuditRecord } from "@certificate-platform/database";
 import type { EffectiveIdentity } from "@certificate-platform/domain";
-import type { ParticipantImportJobPayload } from "@certificate-platform/queue";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -23,8 +22,8 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
   const membershipId = randomUUID();
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
-  const payloads: ParticipantImportJobPayload[] = [];
   let app: ReturnType<typeof buildApi>;
+  let service: PhaseThreeService;
   let projectId = "";
   let trainingId = "";
 
@@ -54,9 +53,11 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
       get: async (key) => objects.get(key) ?? Promise.reject(new Error("missing synthetic object")),
       delete: async (key) => { objects.delete(key); }
     };
-    const service = new PhaseThreeService({ database, storage, participantImports: {
-      enqueue: async (payload) => { payloads.push(payload); }, close: async () => undefined
-    }, audit, cursorSecret: "synthetic-cursor-secret-at-least-32-bytes" });
+    service = new PhaseThreeService({
+      database,
+      storage,
+      cursorSecret: "synthetic-cursor-secret-at-least-32-bytes"
+    });
     app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
       readinessTimeoutMs: 100, logger: false,
       phaseThree: { authentication, authorization: new OrganizationAuthorizationService(authentication, audit), service,
@@ -86,6 +87,26 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
     expect(listed.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: trainingId, project_id: projectId })]));
   });
 
+  it("rolls back a relational mutation when its audit insert fails", async () => {
+    const slug = `audit-rollback-${randomUUID()}`;
+    await expect(service.createProject({
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    }, {
+      name: "Must Roll Back",
+      slug
+    }, "not-a-uuid")).rejects.toBeDefined();
+
+    const persisted = await database.selectFrom("projects").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("slug", "=", slug)
+      .executeTakeFirst();
+    expect(persisted).toBeUndefined();
+  });
+
   it("stores participant import source privately and exposes only a queued job contract", async () => {
     const response = await admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
       .set("idempotency-key", `import-${randomUUID()}`)
@@ -96,11 +117,94 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
     expect(response.body.data.status).toBe("QUEUED");
     expect(JSON.stringify(response.body)).not.toContain("participant-imports/");
     expect(objects.size).toBe(1);
-    expect(payloads).toContainEqual({ version: 1, job_id: response.body.data.job_id, organization_id: organizationId,
-      operation: "VALIDATE" });
+    const outbox = await database.selectFrom("queue_outbox")
+      .select(["message_type", "deduplication_key", "payload_json", "dispatched_at"])
+      .where("organization_id", "=", organizationId)
+      .where("deduplication_key", "=", `${response.body.data.job_id}-validate`)
+      .executeTakeFirstOrThrow();
+    expect(outbox).toEqual(expect.objectContaining({
+      message_type: "PARTICIPANT_IMPORT_VALIDATE",
+      deduplication_key: `${response.body.data.job_id}-validate`,
+      payload_json: {
+        version: 1,
+        job_id: response.body.data.job_id,
+        organization_id: organizationId,
+        operation: "VALIDATE"
+      },
+      dispatched_at: null
+    }));
     const inspected = await request(app.server).get(`/api/admin/participant-imports/${response.body.data.job_id}`)
       .set("x-organization-id", organizationId);
     expect(inspected.status).toBe(200);
     expect(JSON.stringify(inspected.body)).not.toContain("source_storage_key");
+  });
+
+  it("binds participant-import idempotency keys to the original training and source content under concurrency", async () => {
+    const sameKey = `same-${randomUUID()}`;
+    const sameBytes = Buffer.from("display_name,external_reference\nSame Request,REF-SAME\n");
+    const objectCountBeforeSame = objects.size;
+
+    const [firstSame, secondSame] = await Promise.all([
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", sameKey)
+        .attach("file", sameBytes, { filename: "same.csv", contentType: "text/csv" }),
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", sameKey)
+        .attach("file", sameBytes, { filename: "same-retry.csv", contentType: "text/csv" })
+    ]);
+
+    expect(firstSame.status).toBe(202);
+    expect(secondSame.status).toBe(202);
+    expect(firstSame.body.data.job_id).toBe(secondSame.body.data.job_id);
+    expect(objects.size).toBe(objectCountBeforeSame + 1);
+
+    const changedContent = await admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+      .set("idempotency-key", sameKey)
+      .attach("file", Buffer.from("display_name,external_reference\nChanged Request,REF-CHANGED\n"), {
+        filename: "changed.csv", contentType: "text/csv"
+      });
+    expect(changedContent.status).toBe(409);
+
+    const secondTraining = await admin(request(app.server).post("/api/admin/trainings"))
+      .send({ project_id: projectId, name: "Synthetic Training 2", code: `CODE-${randomUUID()}` });
+    expect(secondTraining.status).toBe(201);
+
+    const changedTraining = await admin(request(app.server)
+      .post(`/api/admin/trainings/${secondTraining.body.data.id}/participants/import`))
+      .set("idempotency-key", sameKey)
+      .attach("file", sameBytes, { filename: "same.csv", contentType: "text/csv" });
+    expect(changedTraining.status).toBe(409);
+
+    const sameRows = await database.selectFrom("jobs").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("job_type", "=", "PARTICIPANT_IMPORT")
+      .where("idempotency_key", "=", sameKey)
+      .execute();
+    expect(sameRows).toHaveLength(1);
+
+    const competingKey = `competing-${randomUUID()}`;
+    const objectCountBeforeCompeting = objects.size;
+    const [left, right] = await Promise.all([
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", competingKey)
+        .attach("file", Buffer.from("display_name\nLeft Winner\n"), {
+          filename: "left.csv", contentType: "text/csv"
+        }),
+      admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+        .set("idempotency-key", competingKey)
+        .attach("file", Buffer.from("display_name\nRight Winner\n"), {
+          filename: "right.csv", contentType: "text/csv"
+        })
+    ]);
+
+    expect([left.status, right.status].sort()).toEqual([202, 409]);
+    expect(objects.size).toBe(objectCountBeforeCompeting + 1);
+
+    const competingRows = await database.selectFrom("jobs").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("job_type", "=", "PARTICIPANT_IMPORT")
+      .where("idempotency_key", "=", competingKey)
+      .execute();
+    expect(competingRows).toHaveLength(1);
   });
 });

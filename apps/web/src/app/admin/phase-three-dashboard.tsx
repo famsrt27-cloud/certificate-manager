@@ -5,7 +5,7 @@ import {
   ProjectListResponseSchema, ProjectResponseSchema, TrainingListResponseSchema, TrainingResponseSchema,
   type AuthenticationData, type Participant, type Project, type Training
 } from "@certificate-platform/contracts";
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const apiBasePath = process.env.NEXT_PUBLIC_API_BASE_PATH ?? "/api";
 type Membership = AuthenticationData["memberships"][number];
@@ -22,6 +22,7 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
   const [trainingCode, setTrainingCode] = useState("");
   const [importTrainingId, setImportTrainingId] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
+  const importIdempotencyKeyRef = useRef<string | null>(null);
   const [importJobId, setImportJobId] = useState<string | null>(null);
   const [inspection, setInspection] = useState<ImportInspection | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -92,13 +93,16 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
     event.preventDefault();
     if (importFile === null || importTrainingId === "") return;
     setPending(true); setMessage(null);
+    const idempotencyKey = importIdempotencyKeyRef.current ?? crypto.randomUUID();
+    importIdempotencyKeyRef.current = idempotencyKey;
     try {
       const body = new FormData(); body.set("file", importFile);
       const response = await adminFetch(`/admin/trainings/${importTrainingId}/participants/import`, {
-        method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body
       });
       const parsed = ParticipantImportQueuedResponseSchema.safeParse(await response.json());
       if (!response.ok || !parsed.success) throw new Error("upload import");
+      importIdempotencyKeyRef.current = null;
       setImportJobId(parsed.data.data.job_id); setInspection(null); setMessage("Import queued for validation.");
     } catch { setMessage("The participant import could not be queued."); } finally { setPending(false); }
   };
@@ -158,9 +162,13 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
         <h2 className="text-xl font-semibold" id="import-title">Participant import</h2>
         <p className="mt-1 text-sm text-slate-600">CSV/XLSX: display_name and optional external_reference only.</p>
         <form className="mt-4 grid gap-3 md:grid-cols-3" onSubmit={(event) => void uploadImport(event)}>
-          <label>Training<select className="mt-1 w-full rounded border px-3 py-2" onChange={(event) => setImportTrainingId(event.target.value)} required value={importTrainingId}>
+          <label>Training<select className="mt-1 w-full rounded border px-3 py-2" onChange={(event) => {
+            importIdempotencyKeyRef.current = null; setImportTrainingId(event.target.value);
+          }} required value={importTrainingId}>
             <option value="">Select training</option>{trainings.map((training) => <option key={training.id} value={training.id}>{training.name}</option>)}</select></label>
-          <label>File<input accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="mt-1 block w-full" onChange={(event) => setImportFile(event.target.files?.[0] ?? null)} required type="file" /></label>
+          <label>File<input accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="mt-1 block w-full" onChange={(event) => {
+            importIdempotencyKeyRef.current = null; setImportFile(event.target.files?.[0] ?? null);
+          }} required type="file" /></label>
           <button className="self-end rounded bg-slate-950 px-4 py-2 text-white" disabled={pending} type="submit">Upload and validate</button>
         </form>
         {importJobId && <div className="mt-4 flex gap-3"><button className="rounded border px-4 py-2" disabled={pending} onClick={() => void inspectImport()} type="button">Refresh preview</button>

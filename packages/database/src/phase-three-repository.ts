@@ -116,19 +116,32 @@ export const listParticipants = async (database: Kysely<Database>, input: Omit<L
   return query.orderBy("participant.created_at", "desc").orderBy("participant.id", "desc").limit(input.limit + 1).execute();
 };
 
-export const updateParticipant = async (database: Kysely<Database>, organizationId: string, participantId: string, input: UpdateParticipantInput) =>
-  database.transaction().execute(async (transaction) => {
-    if (input.external_reference !== undefined && input.external_reference !== null) {
-      await sql`select pg_advisory_xact_lock(hashtextextended(${`${organizationId}:${input.external_reference}`}, 0))`.execute(transaction);
-      const conflict = await transaction.selectFrom("participants").select("id").where("organization_id", "=", organizationId)
-        .where("external_reference", "=", input.external_reference).where("id", "!=", participantId).executeTakeFirst();
-      if (conflict !== undefined) return { conflict: true as const, participant: undefined };
-    }
-    const participant = await transaction.updateTable("participants").set({ ...input, updated_at: new Date() })
-      .where("organization_id", "=", organizationId).where("id", "=", participantId)
-      .returning(["id", "display_name", "external_reference", "created_at"]).executeTakeFirst();
-    return { conflict: false as const, participant };
-  });
+export const updateParticipantInTransaction = async (
+  transaction: Transaction<Database>,
+  organizationId: string,
+  participantId: string,
+  input: UpdateParticipantInput
+) => {
+  if (input.external_reference !== undefined && input.external_reference !== null) {
+    await sql`select pg_advisory_xact_lock(hashtextextended(${`${organizationId}:${input.external_reference}`}, 0))`.execute(transaction);
+    const conflict = await transaction.selectFrom("participants").select("id").where("organization_id", "=", organizationId)
+      .where("external_reference", "=", input.external_reference).where("id", "!=", participantId).executeTakeFirst();
+    if (conflict !== undefined) return { conflict: true as const, participant: undefined };
+  }
+  const participant = await transaction.updateTable("participants").set({ ...input, updated_at: new Date() })
+    .where("organization_id", "=", organizationId).where("id", "=", participantId)
+    .returning(["id", "display_name", "external_reference", "created_at"]).executeTakeFirst();
+  return { conflict: false as const, participant };
+};
+
+export const updateParticipant = async (
+  database: Kysely<Database>,
+  organizationId: string,
+  participantId: string,
+  input: UpdateParticipantInput
+) => database.transaction().execute((transaction) =>
+  updateParticipantInTransaction(transaction, organizationId, participantId, input)
+);
 
 export interface CreateParticipantImportInput {
   readonly jobId: string;
@@ -143,26 +156,65 @@ export interface CreateParticipantImportInput {
   readonly sizeBytes: number;
 }
 
+const insertParticipantImportOutbox = async (
+  transaction: Transaction<Database>,
+  organizationId: string,
+  jobId: string,
+  operation: "VALIDATE" | "CONFIRM"
+): Promise<void> => {
+  const messageType = operation === "VALIDATE"
+    ? "PARTICIPANT_IMPORT_VALIDATE"
+    : "PARTICIPANT_IMPORT_CONFIRM";
+  const deduplicationKey = `${jobId}-${operation.toLowerCase()}`;
+  await transaction.insertInto("queue_outbox").values({
+    organization_id: organizationId,
+    message_type: messageType,
+    deduplication_key: deduplicationKey,
+    payload_json: sql<JsonValue>`${JSON.stringify({
+      version: 1,
+      job_id: jobId,
+      organization_id: organizationId,
+      operation
+    })}::jsonb`
+  }).onConflict((conflict) => conflict
+    .columns(["organization_id", "message_type", "deduplication_key"])
+    .doNothing())
+    .execute();
+};
+
 export const findParticipantImportByIdempotency = async (database: Kysely<Database>, organizationId: string, idempotencyKey: string) =>
-  database.selectFrom("jobs").select(["id", "status"]).where("organization_id", "=", organizationId)
-    .where("job_type", "=", "PARTICIPANT_IMPORT").where("idempotency_key", "=", idempotencyKey).executeTakeFirst();
+  database.selectFrom("jobs as job")
+    .innerJoin("participant_import_jobs as detail", (join) => join
+      .onRef("detail.job_id", "=", "job.id")
+      .onRef("detail.organization_id", "=", "job.organization_id"))
+    .select(["job.id", "job.status", "detail.training_id", "detail.content_sha256"])
+    .where("job.organization_id", "=", organizationId)
+    .where("job.job_type", "=", "PARTICIPANT_IMPORT")
+    .where("job.idempotency_key", "=", idempotencyKey)
+    .executeTakeFirst();
+
+export const createParticipantImportInTransaction = async (
+  transaction: Transaction<Database>,
+  input: CreateParticipantImportInput
+): Promise<boolean> => {
+  const training = await transaction.selectFrom("trainings").select("id").where("organization_id", "=", input.organizationId)
+    .where("id", "=", input.trainingId).where("status", "=", "ACTIVE").executeTakeFirst();
+  if (training === undefined) return false;
+  await transaction.insertInto("jobs").values({
+    id: input.jobId, organization_id: input.organizationId, job_type: "PARTICIPANT_IMPORT",
+    idempotency_key: input.idempotencyKey, requested_by_membership_id: input.requestedByMembershipId
+  }).execute();
+  await transaction.insertInto("participant_import_jobs").values({
+    job_id: input.jobId, organization_id: input.organizationId, training_id: input.trainingId,
+    source_storage_key: input.sourceStorageKey, original_filename: input.originalFilename,
+    content_sha256: input.contentSha256, detected_mime_type: input.detectedMimeType, size_bytes: String(input.sizeBytes)
+  }).execute();
+  await insertParticipantImportOutbox(transaction, input.organizationId, input.jobId, "VALIDATE");
+  return true;
+};
 
 export const createParticipantImport = async (database: Kysely<Database>, input: CreateParticipantImportInput) =>
-  database.transaction().execute(async (transaction) => {
-    const training = await transaction.selectFrom("trainings").select("id").where("organization_id", "=", input.organizationId)
-      .where("id", "=", input.trainingId).where("status", "=", "ACTIVE").executeTakeFirst();
-    if (training === undefined) return false;
-    await transaction.insertInto("jobs").values({
-      id: input.jobId, organization_id: input.organizationId, job_type: "PARTICIPANT_IMPORT",
-      idempotency_key: input.idempotencyKey, requested_by_membership_id: input.requestedByMembershipId
-    }).execute();
-    await transaction.insertInto("participant_import_jobs").values({
-      job_id: input.jobId, organization_id: input.organizationId, training_id: input.trainingId,
-      source_storage_key: input.sourceStorageKey, original_filename: input.originalFilename,
-      content_sha256: input.contentSha256, detected_mime_type: input.detectedMimeType, size_bytes: String(input.sizeBytes)
-    }).execute();
-    return true;
-  });
+  database.transaction().execute((transaction) => createParticipantImportInTransaction(transaction, input));
 
 export interface ParticipantImportRecord {
   readonly jobId: string;
@@ -257,26 +309,34 @@ export const inspectParticipantImport = async (database: Kysely<Database>, organ
   return { job, counts, rows };
 };
 
+export const confirmParticipantImportInTransaction = async (
+  transaction: Transaction<Database>,
+  organizationId: string,
+  jobId: string
+) => {
+  const job = await transaction.selectFrom("jobs").select("status").where("organization_id", "=", organizationId)
+    .where("id", "=", jobId).where("job_type", "=", "PARTICIPANT_IMPORT").forUpdate().executeTakeFirst();
+  if (job === undefined) return "NOT_FOUND" as const;
+  const detail = await transaction.selectFrom("participant_import_jobs").select("confirmed_at")
+    .where("organization_id", "=", organizationId).where("job_id", "=", jobId).executeTakeFirstOrThrow();
+  if (detail.confirmed_at !== null) return "ALREADY_CONFIRMED" as const;
+  if (job.status !== "AWAITING_CONFIRMATION") return "INVALID_STATE" as const;
+  const valid = await transaction.selectFrom("participant_import_rows").select(sql<number>`count(*)::int`.as("count"))
+    .where("organization_id", "=", organizationId).where("job_id", "=", jobId).where("status", "=", "VALID")
+    .executeTakeFirstOrThrow();
+  if (valid.count === 0) return "NO_VALID_ROWS" as const;
+  const now = new Date();
+  await transaction.updateTable("participant_import_jobs").set({ confirmed_at: now })
+    .where("organization_id", "=", organizationId).where("job_id", "=", jobId).execute();
+  await transaction.updateTable("jobs").set({
+    status: "QUEUED", queued_at: now, started_at: null, completed_at: null, updated_at: now
+  }).where("organization_id", "=", organizationId).where("id", "=", jobId).execute();
+  await insertParticipantImportOutbox(transaction, organizationId, jobId, "CONFIRM");
+  return "CONFIRMED" as const;
+};
+
 export const confirmParticipantImport = async (database: Kysely<Database>, organizationId: string, jobId: string) =>
-  database.transaction().execute(async (transaction) => {
-    const job = await transaction.selectFrom("jobs").select("status").where("organization_id", "=", organizationId)
-      .where("id", "=", jobId).where("job_type", "=", "PARTICIPANT_IMPORT").forUpdate().executeTakeFirst();
-    if (job === undefined) return "NOT_FOUND" as const;
-    const detail = await transaction.selectFrom("participant_import_jobs").select("confirmed_at")
-      .where("organization_id", "=", organizationId).where("job_id", "=", jobId).executeTakeFirstOrThrow();
-    if (detail.confirmed_at !== null) return "ALREADY_CONFIRMED" as const;
-    if (job.status !== "AWAITING_CONFIRMATION") return "INVALID_STATE" as const;
-    const valid = await transaction.selectFrom("participant_import_rows").select(sql<number>`count(*)::int`.as("count"))
-      .where("organization_id", "=", organizationId).where("job_id", "=", jobId).where("status", "=", "VALID")
-      .executeTakeFirstOrThrow();
-    if (valid.count === 0) return "NO_VALID_ROWS" as const;
-    const now = new Date();
-    await transaction.updateTable("participant_import_jobs").set({ confirmed_at: now })
-      .where("organization_id", "=", organizationId).where("job_id", "=", jobId).execute();
-    await transaction.updateTable("jobs").set({ status: "QUEUED", queued_at: now, completed_at: null, updated_at: now })
-      .where("organization_id", "=", organizationId).where("id", "=", jobId).execute();
-    return "CONFIRMED" as const;
-  });
+  database.transaction().execute((transaction) => confirmParticipantImportInTransaction(transaction, organizationId, jobId));
 
 export const revertParticipantImportConfirmation = async (database: Kysely<Database>, organizationId: string, jobId: string) =>
   database.transaction().execute(async (transaction) => {
@@ -284,6 +344,12 @@ export const revertParticipantImportConfirmation = async (database: Kysely<Datab
       .where("organization_id", "=", organizationId).where("job_id", "=", jobId).execute();
     await transaction.updateTable("jobs").set({ status: "AWAITING_CONFIRMATION", updated_at: new Date() })
       .where("organization_id", "=", organizationId).where("id", "=", jobId).where("status", "=", "QUEUED").execute();
+    await transaction.deleteFrom("queue_outbox")
+      .where("organization_id", "=", organizationId)
+      .where("message_type", "=", "PARTICIPANT_IMPORT_CONFIRM")
+      .where("deduplication_key", "=", `${jobId}-confirm`)
+      .where("dispatched_at", "is", null)
+      .execute();
   });
 
 export const findJob = async (database: Kysely<Database>, organizationId: string, jobId: string) =>

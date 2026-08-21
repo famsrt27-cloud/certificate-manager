@@ -50,6 +50,7 @@ describe.skipIf(!integrationEnabled)("participant import worker PostgreSQL integ
   });
 
   afterAll(async () => {
+    await database.deleteFrom("queue_outbox").where("organization_id", "=", organizationId).execute();
     await database.deleteFrom("training_participants").where("organization_id", "=", organizationId).execute();
     await database.deleteFrom("participant_import_rows").where("organization_id", "=", organizationId).execute();
     await database.deleteFrom("participants").where("organization_id", "=", organizationId).execute();
