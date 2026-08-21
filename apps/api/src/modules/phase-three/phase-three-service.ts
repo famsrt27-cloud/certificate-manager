@@ -8,12 +8,11 @@ import { ImportRowValidationErrorSchema } from "@certificate-platform/contracts"
 import {
   archiveProject, archiveTraining, confirmParticipantImport, createParticipantImport, createProject, createTraining,
   findJob, findParticipant, findParticipantImportByIdempotency, findProject, findTraining,
-  inspectParticipantImport, listParticipants, listProjects, listTrainings, revertParticipantImportConfirmation,
+  inspectParticipantImport, listParticipants, listProjects, listTrainings,
   updateParticipant, updateProject, updateTraining,
   type DatabaseClient
 } from "@certificate-platform/database";
 import type { AuditAction, AuditWriter } from "@certificate-platform/domain";
-import type { ParticipantImportProducer } from "@certificate-platform/queue";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import { z } from "zod";
 
@@ -62,7 +61,6 @@ const mapParticipant = (row: { id: string; display_name: string; external_refere
 export interface PhaseThreeServiceOptions {
   readonly database: DatabaseClient;
   readonly storage: PrivateObjectStorage;
-  readonly participantImports: ParticipantImportProducer;
   readonly audit: AuditWriter;
   readonly cursorSecret: string;
 }
@@ -70,14 +68,12 @@ export interface PhaseThreeServiceOptions {
 export class PhaseThreeService {
   readonly #database: DatabaseClient;
   readonly #storage: PrivateObjectStorage;
-  readonly #participantImports: ParticipantImportProducer;
   readonly #audit: AuditWriter;
   readonly #cursors: CursorCodec;
 
   constructor(options: PhaseThreeServiceOptions) {
     this.#database = options.database;
     this.#storage = options.storage;
-    this.#participantImports = options.participantImports;
     this.#audit = options.audit;
     this.#cursors = new CursorCodec(options.cursorSecret);
   }
@@ -223,7 +219,6 @@ export class PhaseThreeService {
         existing.content_sha256
       );
       if (existingFingerprint !== requestFingerprint) conflict();
-      if (existing.status === "QUEUED") await this.#enqueue(existing.id, context.organizationId, "VALIDATE");
       if (existing.status === "FAILED" || existing.status === "DEAD_LETTER" || existing.status === "CANCELLED") conflict();
       return { job_id: existing.id, status: existing.status };
     }
@@ -252,7 +247,6 @@ export class PhaseThreeService {
             duplicate.content_sha256
           );
           if (duplicateFingerprint !== requestFingerprint) conflict();
-          if (duplicate.status === "QUEUED") await this.#enqueue(duplicate.id, context.organizationId, "VALIDATE");
           if (duplicate.status === "FAILED" || duplicate.status === "DEAD_LETTER" || duplicate.status === "CANCELLED") conflict();
           return { job_id: duplicate.id, status: duplicate.status };
         }
@@ -260,7 +254,6 @@ export class PhaseThreeService {
       throw error;
     }
     await this.#writeAudit(context, "PARTICIPANT_IMPORT_QUEUED", "participant_import", jobId, requestId);
-    await this.#enqueue(jobId, context.organizationId, "VALIDATE");
     return { job_id: jobId, status: "QUEUED" as const };
   }
 
@@ -292,17 +285,9 @@ export class PhaseThreeService {
     const outcome = await confirmParticipantImport(this.#database, context.organizationId, jobId);
     if (outcome === "NOT_FOUND") return notFound();
     if (outcome === "INVALID_STATE" || outcome === "NO_VALID_ROWS") conflict();
-    try {
-      const current = await findJob(this.#database, context.organizationId, jobId);
-      if (current === undefined) return notFound();
-      if (current.status === "QUEUED" || current.status === "RUNNING") {
-        await this.#enqueue(jobId, context.organizationId, "CONFIRM");
-      }
-    } catch (error) {
-      if (outcome === "CONFIRMED") await revertParticipantImportConfirmation(this.#database, context.organizationId, jobId);
-      throw error;
+    if (outcome === "CONFIRMED") {
+      await this.#writeAudit(context, "PARTICIPANT_IMPORT_CONFIRMED", "participant_import", jobId, requestId);
     }
-    if (outcome === "CONFIRMED") await this.#writeAudit(context, "PARTICIPANT_IMPORT_CONFIRMED", "participant_import", jobId, requestId);
     const current = await findJob(this.#database, context.organizationId, jobId);
     if (current === undefined) return notFound();
     return { job_id: jobId, status: current.status };
@@ -322,14 +307,6 @@ export class PhaseThreeService {
     const last = pageRows.at(-1);
     return { data: pageRows.map(mapper), nextCursor: rows.length > limit && last !== undefined
       ? this.#cursors.encode({ organizationId, resource, createdAt: last.created_at, id: last.id }) : null };
-  }
-
-  async #enqueue(jobId: string, organizationId: string, operation: "VALIDATE" | "CONFIRM"): Promise<void> {
-    try {
-      await this.#participantImports.enqueue({ version: 1, job_id: jobId, organization_id: organizationId, operation });
-    } catch {
-      throw new ApplicationError("SERVICE_UNAVAILABLE", "The service is temporarily unavailable.", 503);
-    }
   }
 
   async #writeAudit(context: TenantAuthorizationContext, action: AuditAction,

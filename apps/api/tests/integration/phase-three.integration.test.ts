@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { closeDatabase, createDatabase, insertAuditRecord } from "@certificate-platform/database";
 import type { EffectiveIdentity } from "@certificate-platform/domain";
-import type { ParticipantImportJobPayload } from "@certificate-platform/queue";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -23,7 +22,6 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
   const membershipId = randomUUID();
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
-  const payloads: ParticipantImportJobPayload[] = [];
   let app: ReturnType<typeof buildApi>;
   let projectId = "";
   let trainingId = "";
@@ -54,9 +52,12 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
       get: async (key) => objects.get(key) ?? Promise.reject(new Error("missing synthetic object")),
       delete: async (key) => { objects.delete(key); }
     };
-    const service = new PhaseThreeService({ database, storage, participantImports: {
-      enqueue: async (payload) => { payloads.push(payload); }, close: async () => undefined
-    }, audit, cursorSecret: "synthetic-cursor-secret-at-least-32-bytes" });
+    const service = new PhaseThreeService({
+      database,
+      storage,
+      audit,
+      cursorSecret: "synthetic-cursor-secret-at-least-32-bytes"
+    });
     app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
       readinessTimeoutMs: 100, logger: false,
       phaseThree: { authentication, authorization: new OrganizationAuthorizationService(authentication, audit), service,
@@ -96,8 +97,22 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
     expect(response.body.data.status).toBe("QUEUED");
     expect(JSON.stringify(response.body)).not.toContain("participant-imports/");
     expect(objects.size).toBe(1);
-    expect(payloads).toContainEqual({ version: 1, job_id: response.body.data.job_id, organization_id: organizationId,
-      operation: "VALIDATE" });
+    const outbox = await database.selectFrom("queue_outbox")
+      .select(["message_type", "deduplication_key", "payload_json", "dispatched_at"])
+      .where("organization_id", "=", organizationId)
+      .where("deduplication_key", "=", `${response.body.data.job_id}-validate`)
+      .executeTakeFirstOrThrow();
+    expect(outbox).toEqual(expect.objectContaining({
+      message_type: "PARTICIPANT_IMPORT_VALIDATE",
+      deduplication_key: `${response.body.data.job_id}-validate`,
+      payload_json: {
+        version: 1,
+        job_id: response.body.data.job_id,
+        organization_id: organizationId,
+        operation: "VALIDATE"
+      },
+      dispatched_at: null
+    }));
     const inspected = await request(app.server).get(`/api/admin/participant-imports/${response.body.data.job_id}`)
       .set("x-organization-id", organizationId);
     expect(inspected.status).toBe(200);

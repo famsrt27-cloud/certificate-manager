@@ -11,4 +11,5 @@ export {
 } from "./authentication-repository.js";
 export * from "./phase-three-repository.js";
 export * from "./phase-four-repository.js";
+export * from "./queue-outbox-repository.js";
 export type * from "./types.js";

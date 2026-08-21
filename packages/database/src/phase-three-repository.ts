@@ -143,6 +143,32 @@ export interface CreateParticipantImportInput {
   readonly sizeBytes: number;
 }
 
+const insertParticipantImportOutbox = async (
+  transaction: Transaction<Database>,
+  organizationId: string,
+  jobId: string,
+  operation: "VALIDATE" | "CONFIRM"
+): Promise<void> => {
+  const messageType = operation === "VALIDATE"
+    ? "PARTICIPANT_IMPORT_VALIDATE"
+    : "PARTICIPANT_IMPORT_CONFIRM";
+  const deduplicationKey = `${jobId}-${operation.toLowerCase()}`;
+  await transaction.insertInto("queue_outbox").values({
+    organization_id: organizationId,
+    message_type: messageType,
+    deduplication_key: deduplicationKey,
+    payload_json: sql<JsonValue>`${JSON.stringify({
+      version: 1,
+      job_id: jobId,
+      organization_id: organizationId,
+      operation
+    })}::jsonb`
+  }).onConflict((conflict) => conflict
+    .columns(["organization_id", "message_type", "deduplication_key"])
+    .doNothing())
+    .execute();
+};
+
 export const findParticipantImportByIdempotency = async (database: Kysely<Database>, organizationId: string, idempotencyKey: string) =>
   database.selectFrom("jobs as job")
     .innerJoin("participant_import_jobs as detail", (join) => join
@@ -168,6 +194,7 @@ export const createParticipantImport = async (database: Kysely<Database>, input:
       source_storage_key: input.sourceStorageKey, original_filename: input.originalFilename,
       content_sha256: input.contentSha256, detected_mime_type: input.detectedMimeType, size_bytes: String(input.sizeBytes)
     }).execute();
+    await insertParticipantImportOutbox(transaction, input.organizationId, input.jobId, "VALIDATE");
     return true;
   });
 
@@ -280,8 +307,10 @@ export const confirmParticipantImport = async (database: Kysely<Database>, organ
     const now = new Date();
     await transaction.updateTable("participant_import_jobs").set({ confirmed_at: now })
       .where("organization_id", "=", organizationId).where("job_id", "=", jobId).execute();
-    await transaction.updateTable("jobs").set({ status: "QUEUED", queued_at: now, completed_at: null, updated_at: now })
-      .where("organization_id", "=", organizationId).where("id", "=", jobId).execute();
+    await transaction.updateTable("jobs").set({
+      status: "QUEUED", queued_at: now, started_at: null, completed_at: null, updated_at: now
+    }).where("organization_id", "=", organizationId).where("id", "=", jobId).execute();
+    await insertParticipantImportOutbox(transaction, organizationId, jobId, "CONFIRM");
     return "CONFIRMED" as const;
   });
 
@@ -291,6 +320,12 @@ export const revertParticipantImportConfirmation = async (database: Kysely<Datab
       .where("organization_id", "=", organizationId).where("job_id", "=", jobId).execute();
     await transaction.updateTable("jobs").set({ status: "AWAITING_CONFIRMATION", updated_at: new Date() })
       .where("organization_id", "=", organizationId).where("id", "=", jobId).where("status", "=", "QUEUED").execute();
+    await transaction.deleteFrom("queue_outbox")
+      .where("organization_id", "=", organizationId)
+      .where("message_type", "=", "PARTICIPANT_IMPORT_CONFIRM")
+      .where("deduplication_key", "=", `${jobId}-confirm`)
+      .where("dispatched_at", "is", null)
+      .execute();
   });
 
 export const findJob = async (database: Kysely<Database>, organizationId: string, jobId: string) =>

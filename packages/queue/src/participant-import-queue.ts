@@ -2,7 +2,7 @@ import { Queue, Worker, type Job, type JobsOptions } from "bullmq";
 import type { Redis } from "ioredis";
 import { z } from "zod";
 
-export const PARTICIPANT_IMPORT_QUEUE_NAME = "participant-import:v1";
+export const PARTICIPANT_IMPORT_QUEUE_NAME = "participant-import-v1";
 export const PARTICIPANT_IMPORT_JOB_NAMES = {
   validate: "validate-participant-import",
   confirm: "confirm-participant-import"
