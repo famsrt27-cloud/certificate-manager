@@ -12,6 +12,7 @@ import {
 import { createPrivateObjectStorage, createS3Client, ensurePrivateBucket } from "@certificate-platform/storage";
 
 import { buildWorkerHealthApp } from "./health-app.js";
+import { ParticipantImportSourceCleanupReconciler } from "./participant-import-source-cleanup-reconciler.js";
 import { ParticipantImportProcessor } from "./processors/participant-import-processor.js";
 import { QueueOutboxDispatcher } from "./queue-outbox-dispatcher.js";
 import { StorageCleanupReconciler } from "./storage-cleanup-reconciler.js";
@@ -73,10 +74,15 @@ const storageCleanupReconciler = new StorageCleanupReconciler({
   batchSize: 100,
   retryDelayMs: 30_000
 });
+const participantImportSourceCleanupReconciler = new ParticipantImportSourceCleanupReconciler({
+  database,
+  storage,
+  batchSize: 100,
+  retryDelayMs: 30_000
+});
 const cleanupParticipantImports = async (): Promise<void> => {
   const cutoff = new Date(Date.now() - environment.PARTICIPANT_IMPORT_RETENTION_HOURS * 60 * 60 * 1_000);
-  const storageKeys = await cleanupExpiredParticipantImports(database, cutoff);
-  await Promise.allSettled(storageKeys.map((key) => storage.delete(key)));
+  await cleanupExpiredParticipantImports(database, cutoff);
 };
 await cleanupParticipantImports();
 const participantImportCleanupTimer = setInterval(() => void cleanupParticipantImports().catch(() => undefined), 60 * 60 * 1_000);
@@ -133,6 +139,31 @@ await reconcileStorageCleanup();
 const storageCleanupTimer = setInterval(() => void reconcileStorageCleanup(), 30_000);
 storageCleanupTimer.unref();
 
+let participantImportSourceCleanupPromise: Promise<void> | null = null;
+const reconcileParticipantImportSourceCleanup = (): Promise<void> => {
+  if (participantImportSourceCleanupPromise !== null) return participantImportSourceCleanupPromise;
+  const run = participantImportSourceCleanupReconciler.runOnce()
+    .then((result) => {
+      if (result.failed > 0) {
+        app.log.warn({ result }, "participant import source cleanup completed with failures");
+      }
+    })
+    .catch((error: unknown) => {
+      app.log.warn({ err: error }, "participant import source cleanup reconciliation failed");
+    })
+    .finally(() => {
+      participantImportSourceCleanupPromise = null;
+    });
+  participantImportSourceCleanupPromise = run;
+  return run;
+};
+await reconcileParticipantImportSourceCleanup();
+const participantImportSourceCleanupTimer = setInterval(
+  () => void reconcileParticipantImportSourceCleanup(),
+  30_000
+);
+participantImportSourceCleanupTimer.unref();
+
 let stopping = false;
 const shutdown = async (signal: string): Promise<void> => {
   if (stopping) return;
@@ -140,11 +171,13 @@ const shutdown = async (signal: string): Promise<void> => {
   clearInterval(participantImportCleanupTimer);
   clearInterval(queueOutboxDispatchTimer);
   clearInterval(storageCleanupTimer);
+  clearInterval(participantImportSourceCleanupTimer);
 
   app.log.info({ signal }, "shutting down");
   await app.close();
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
+  if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
   await Promise.allSettled([participantImportWorker.close(), participantImports.close()]);
   s3.destroy();
   await Promise.allSettled([
@@ -164,8 +197,10 @@ try {
   app.log.fatal({ err: error }, "worker startup failed");
   clearInterval(queueOutboxDispatchTimer);
   clearInterval(storageCleanupTimer);
+  clearInterval(participantImportSourceCleanupTimer);
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
+  if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
   await Promise.allSettled([participantImportWorker.close(), participantImports.close()]);
   s3.destroy();
   await Promise.allSettled([

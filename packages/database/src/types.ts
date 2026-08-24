@@ -159,6 +159,12 @@ export interface ParticipantImportJobsTable {
   detected_mime_type: string;
   size_bytes: string;
   confirmed_at: NullableTimestamp;
+  source_cleanup_requested_at: NullableTimestamp;
+  source_cleanup_completed_at: NullableTimestamp;
+  source_cleanup_attempt_count: Generated<number>;
+  source_cleanup_last_attempt_at: NullableTimestamp;
+  source_cleanup_last_error_code: string | null;
+  retention_cleanup_completed_at: NullableTimestamp;
 }
 
 export interface QueueOutboxTable {

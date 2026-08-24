@@ -7,6 +7,7 @@ import {
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { ParticipantImportSourceCleanupReconciler } from "../../src/participant-import-source-cleanup-reconciler.js";
 import { ParticipantImportProcessor } from "../../src/processors/participant-import-processor.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -23,6 +24,7 @@ describe.skipIf(!integrationEnabled)("participant import worker PostgreSQL integ
   const storageKey = `participant-imports/${organizationId}/${jobId}/synthetic.csv`;
   const bytes = Buffer.from("display_name,external_reference\nSynthetic Person,REF-1\n,REF-2\n");
   const objects = new Map<string, Uint8Array>();
+  let failStorageDeletes = false;
   objects.set(storageKey, new Uint8Array(bytes));
   const storage: PrivateObjectStorage = {
     put: async (input) => { objects.set(input.key, input.body); },
@@ -31,10 +33,20 @@ describe.skipIf(!integrationEnabled)("participant import worker PostgreSQL integ
       if (value === undefined) throw new Error("missing synthetic object");
       return value;
     },
-    delete: async (key) => { objects.delete(key); }
+    delete: async (key) => {
+      if (failStorageDeletes) throw new Error("synthetic storage delete failure");
+      objects.delete(key);
+    }
   };
   const processor = new ParticipantImportProcessor({ database, storage, maximumBytes: 1_024 * 1_024,
     maximumRows: 100, maximumUncompressedBytes: 2 * 1_024 * 1_024 });
+  const sourceCleanup = new ParticipantImportSourceCleanupReconciler({
+    database,
+    storage,
+    batchSize: 20,
+    retryDelayMs: 0,
+    organizationId
+  });
 
   beforeAll(async () => {
     await database.insertInto("users").values({ id: userId, email: `worker-${randomUUID()}@example.invalid`, password_hash: "synthetic" }).execute();
@@ -66,6 +78,8 @@ describe.skipIf(!integrationEnabled)("participant import worker PostgreSQL integ
 
   it("validates, previews, confirms and imports only valid staged rows idempotently", async () => {
     await processor.process({ version: 1, job_id: jobId, organization_id: organizationId, operation: "VALIDATE" });
+    expect(objects.has(storageKey)).toBe(true);
+    expect(await sourceCleanup.runOnce()).toEqual({ claimed: 1, deleted: 1, failed: 0 });
     expect(objects.has(storageKey)).toBe(false);
     const preview = await inspectParticipantImport(database, organizationId, jobId, 50);
     expect(preview?.job.status).toBe("AWAITING_CONFIRMATION");
@@ -102,15 +116,88 @@ describe.skipIf(!integrationEnabled)("participant import worker PostgreSQL integ
       status: "VALID", validation_errors: null, participant_id: null
     }).execute();
 
-    const storageKeys = await cleanupExpiredParticipantImports(database, new Date("2020-01-08T00:00:00Z"));
+    const cleaned = await cleanupExpiredParticipantImports(database, new Date("2020-01-08T00:00:00Z"));
+    const repeated = await cleanupExpiredParticipantImports(database, new Date("2020-01-08T00:00:00Z"));
     const expiredJob = await database.selectFrom("jobs").select(["status", "last_error_code"])
       .where("id", "=", expiredJobId).executeTakeFirstOrThrow();
+    const detail = await database.selectFrom("participant_import_jobs")
+      .select(["source_cleanup_requested_at", "retention_cleanup_completed_at"])
+      .where("job_id", "=", expiredJobId)
+      .executeTakeFirstOrThrow();
     const stagedRows = await database.selectFrom("participant_import_rows").select("id")
       .where("job_id", "=", expiredJobId).execute();
 
-    expect(storageKeys).toContain(expiredStorageKey);
+    expect(cleaned).toBe(1);
+    expect(repeated).toBe(0);
     expect(expiredJob).toEqual({ status: "CANCELLED", last_error_code: "IMPORT_CONFIRMATION_EXPIRED" });
+    expect(detail.source_cleanup_requested_at).toBeInstanceOf(Date);
+    expect(detail.retention_cleanup_completed_at).toBeInstanceOf(Date);
     expect(stagedRows).toHaveLength(0);
+
+    expect(await sourceCleanup.runOnce()).toEqual({ claimed: 1, deleted: 1, failed: 0 });
+    expect(await sourceCleanup.runOnce()).toEqual({ claimed: 0, deleted: 0, failed: 0 });
+  });
+
+  it("keeps a validated import successful when source deletion fails and retries cleanup independently", async () => {
+    const cleanupJobId = randomUUID();
+    const cleanupStorageKey = `participant-imports/${organizationId}/${cleanupJobId}/cleanup.csv`;
+    const cleanupBytes = Buffer.from("display_name,external_reference\nCleanup Person,CLEAN-1\n");
+    objects.set(cleanupStorageKey, new Uint8Array(cleanupBytes));
+    await createParticipantImport(database, {
+      jobId: cleanupJobId,
+      organizationId,
+      trainingId,
+      idempotencyKey: `cleanup-${randomUUID()}`,
+      requestedByMembershipId: membershipId,
+      sourceStorageKey: cleanupStorageKey,
+      originalFilename: "cleanup.csv",
+      contentSha256: createHash("sha256").update(cleanupBytes).digest(),
+      detectedMimeType: "text/csv",
+      sizeBytes: cleanupBytes.byteLength
+    });
+
+    await processor.process({
+      version: 1,
+      job_id: cleanupJobId,
+      organization_id: organizationId,
+      operation: "VALIDATE"
+    });
+
+    failStorageDeletes = true;
+    const failedCleanup = await sourceCleanup.runOnce();
+    failStorageDeletes = false;
+
+    const jobAfterDeleteFailure = await database.selectFrom("jobs")
+      .select(["status", "last_error_code"])
+      .where("id", "=", cleanupJobId)
+      .executeTakeFirstOrThrow();
+    const failedMetadata = await database.selectFrom("participant_import_jobs")
+      .select([
+        "source_cleanup_completed_at",
+        "source_cleanup_attempt_count",
+        "source_cleanup_last_error_code"
+      ])
+      .where("job_id", "=", cleanupJobId)
+      .executeTakeFirstOrThrow();
+
+    expect(failedCleanup).toEqual({ claimed: 1, deleted: 0, failed: 1 });
+    expect(jobAfterDeleteFailure).toEqual({ status: "AWAITING_CONFIRMATION", last_error_code: null });
+    expect(failedMetadata.source_cleanup_completed_at).toBeNull();
+    expect(failedMetadata.source_cleanup_attempt_count).toBe(1);
+    expect(failedMetadata.source_cleanup_last_error_code).toBe("IMPORT_SOURCE_DELETE_FAILED");
+    expect(objects.has(cleanupStorageKey)).toBe(true);
+
+    expect(await sourceCleanup.runOnce()).toEqual({ claimed: 1, deleted: 1, failed: 0 });
+    expect(await sourceCleanup.runOnce()).toEqual({ claimed: 0, deleted: 0, failed: 0 });
+    expect(objects.has(cleanupStorageKey)).toBe(false);
+
+    const completedMetadata = await database.selectFrom("participant_import_jobs")
+      .select(["source_cleanup_completed_at", "source_cleanup_attempt_count", "source_cleanup_last_error_code"])
+      .where("job_id", "=", cleanupJobId)
+      .executeTakeFirstOrThrow();
+    expect(completedMetadata.source_cleanup_completed_at).toBeInstanceOf(Date);
+    expect(completedMetadata.source_cleanup_attempt_count).toBe(2);
+    expect(completedMetadata.source_cleanup_last_error_code).toBeNull();
   });
 
   it("does not resolve an import job through a different tenant scope", async () => {

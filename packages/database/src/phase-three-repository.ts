@@ -265,6 +265,12 @@ export const stageParticipantImportRows = async (database: Kysely<Database>, imp
       display_name: row.displayName, external_reference: row.externalReference, status: row.status,
       validation_errors: sql<JsonValue>`${JSON.stringify(row.validationErrors)}::jsonb`
     }))).execute();
+    await transaction.updateTable("participant_import_jobs").set({
+      source_cleanup_requested_at: new Date()
+    }).where("organization_id", "=", importJob.organizationId)
+      .where("job_id", "=", importJob.jobId)
+      .where("source_cleanup_requested_at", "is", null)
+      .execute();
     await transaction.updateTable("jobs").set({
       status: "AWAITING_CONFIRMATION", progress_completed: rows.length, progress_total: rows.length,
       started_at: new Date(), last_error_code: null, updated_at: new Date()
@@ -272,12 +278,34 @@ export const stageParticipantImportRows = async (database: Kysely<Database>, imp
     return true;
   });
 
-export const failParticipantImport = async (database: Kysely<Database>, organizationId: string, jobId: string,
-  status: "FAILED" | "DEAD_LETTER", errorCode: string) => database.updateTable("jobs").set({
-  status, last_error_code: errorCode,
-  completed_at: new Date(), updated_at: new Date()
-}).where("organization_id", "=", organizationId).where("id", "=", jobId)
-  .where("status", "not in", ["SUCCEEDED", "CANCELLED"]).execute();
+export const failParticipantImport = async (
+  database: Kysely<Database>,
+  organizationId: string,
+  jobId: string,
+  status: "FAILED" | "DEAD_LETTER",
+  errorCode: string
+) => database.transaction().execute(async (transaction) => {
+  const now = new Date();
+  const failed = await transaction.updateTable("jobs").set({
+    status,
+    last_error_code: errorCode,
+    completed_at: now,
+    updated_at: now
+  }).where("organization_id", "=", organizationId)
+    .where("id", "=", jobId)
+    .where("status", "not in", ["SUCCEEDED", "CANCELLED"])
+    .returning("id")
+    .executeTakeFirst();
+  if (failed === undefined) return false;
+
+  await transaction.updateTable("participant_import_jobs").set({
+    source_cleanup_requested_at: now
+  }).where("organization_id", "=", organizationId)
+    .where("job_id", "=", jobId)
+    .where("source_cleanup_requested_at", "is", null)
+    .execute();
+  return true;
+});
 
 export const recordParticipantImportAttempt = async (database: Kysely<Database>, organizationId: string, jobId: string) =>
   database.updateTable("jobs").set({
@@ -407,20 +435,116 @@ export const applyParticipantImport = async (database: Kysely<Database>, importJ
     return true;
   });
 
-export const cleanupExpiredParticipantImports = async (database: Kysely<Database>, cutoff: Date): Promise<readonly string[]> =>
-  database.transaction().execute(async (transaction) => {
-    const expired = await transaction.selectFrom("participant_import_jobs as detail")
-      .innerJoin("jobs as job", (join) => join.onRef("job.id", "=", "detail.job_id")
-        .onRef("job.organization_id", "=", "detail.organization_id"))
-      .select(["job.id", "job.organization_id", "job.status", "detail.source_storage_key"])
-      .where("job.created_at", "<", cutoff)
-      .where("job.status", "in", ["AWAITING_CONFIRMATION", "SUCCEEDED", "FAILED", "DEAD_LETTER", "CANCELLED"])
-      .forUpdate().execute();
-    if (expired.length === 0) return [];
-    const awaitingIds = expired.filter((row) => row.status === "AWAITING_CONFIRMATION").map((row) => row.id);
-    if (awaitingIds.length > 0) await transaction.updateTable("jobs").set({
-      status: "CANCELLED", completed_at: new Date(), last_error_code: "IMPORT_CONFIRMATION_EXPIRED", updated_at: new Date()
+export const cleanupExpiredParticipantImports = async (
+  database: Kysely<Database>,
+  cutoff: Date
+): Promise<number> => database.transaction().execute(async (transaction) => {
+  const expired = await transaction.selectFrom("participant_import_jobs as detail")
+    .innerJoin("jobs as job", (join) => join.onRef("job.id", "=", "detail.job_id")
+      .onRef("job.organization_id", "=", "detail.organization_id"))
+    .select(["job.id", "job.organization_id", "job.status"])
+    .where("job.created_at", "<", cutoff)
+    .where("job.status", "in", ["AWAITING_CONFIRMATION", "SUCCEEDED", "FAILED", "DEAD_LETTER", "CANCELLED"])
+    .where("detail.retention_cleanup_completed_at", "is", null)
+    .forUpdate()
+    .execute();
+  if (expired.length === 0) return 0;
+
+  const now = new Date();
+  const awaitingIds = expired.filter((row) => row.status === "AWAITING_CONFIRMATION").map((row) => row.id);
+  if (awaitingIds.length > 0) {
+    await transaction.updateTable("jobs").set({
+      status: "CANCELLED",
+      completed_at: now,
+      last_error_code: "IMPORT_CONFIRMATION_EXPIRED",
+      updated_at: now
     }).where("id", "in", awaitingIds).execute();
-    await transaction.deleteFrom("participant_import_rows").where("job_id", "in", expired.map((row) => row.id)).execute();
-    return expired.map((row) => row.source_storage_key);
+  }
+
+  const expiredIds = expired.map((row) => row.id);
+  await transaction.deleteFrom("participant_import_rows").where("job_id", "in", expiredIds).execute();
+  await transaction.updateTable("participant_import_jobs").set({
+    retention_cleanup_completed_at: now,
+    source_cleanup_requested_at: sql<Date>`coalesce(source_cleanup_requested_at, ${now})`
+  }).where("job_id", "in", expiredIds).execute();
+  return expired.length;
+});
+
+export interface ClaimedParticipantImportSourceCleanup {
+  readonly jobId: string;
+  readonly organizationId: string;
+  readonly sourceStorageKey: string;
+}
+
+export const claimPendingParticipantImportSourceCleanups = async (
+  database: Kysely<Database>,
+  input: {
+    readonly limit: number;
+    readonly claimedAt: Date;
+    readonly retryBefore: Date;
+    readonly organizationId?: string;
+  }
+): Promise<readonly ClaimedParticipantImportSourceCleanup[]> =>
+  database.transaction().execute(async (transaction) => {
+    let query = transaction.selectFrom("participant_import_jobs")
+      .select(["job_id", "organization_id", "source_storage_key"])
+      .where("source_cleanup_requested_at", "is not", null)
+      .where("source_cleanup_completed_at", "is", null)
+      .where((expression) => expression.or([
+        expression("source_cleanup_last_attempt_at", "is", null),
+        expression("source_cleanup_last_attempt_at", "<=", input.retryBefore)
+      ]));
+    if (input.organizationId !== undefined) {
+      query = query.where("organization_id", "=", input.organizationId);
+    }
+
+    const rows = await query
+      .orderBy("source_cleanup_requested_at", "asc")
+      .orderBy("job_id", "asc")
+      .limit(input.limit)
+      .forUpdate()
+      .skipLocked()
+      .execute();
+    if (rows.length === 0) return [];
+
+    await transaction.updateTable("participant_import_jobs").set({
+      source_cleanup_attempt_count: sql<number>`source_cleanup_attempt_count + 1`,
+      source_cleanup_last_attempt_at: input.claimedAt,
+      source_cleanup_last_error_code: null
+    }).where("job_id", "in", rows.map((row) => row.job_id)).execute();
+
+    return rows.map((row) => ({
+      jobId: row.job_id,
+      organizationId: row.organization_id,
+      sourceStorageKey: row.source_storage_key
+    }));
   });
+
+export const completeParticipantImportSourceCleanup = async (
+  database: Kysely<Database>,
+  organizationId: string,
+  jobId: string,
+  completedAt: Date
+): Promise<void> => {
+  await database.updateTable("participant_import_jobs").set({
+    source_cleanup_completed_at: completedAt,
+    source_cleanup_last_error_code: null
+  }).where("organization_id", "=", organizationId)
+    .where("job_id", "=", jobId)
+    .where("source_cleanup_completed_at", "is", null)
+    .execute();
+};
+
+export const markParticipantImportSourceCleanupFailed = async (
+  database: Kysely<Database>,
+  organizationId: string,
+  jobId: string,
+  errorCode: string
+): Promise<void> => {
+  await database.updateTable("participant_import_jobs").set({
+    source_cleanup_last_error_code: errorCode
+  }).where("organization_id", "=", organizationId)
+    .where("job_id", "=", jobId)
+    .where("source_cleanup_completed_at", "is", null)
+    .execute();
+};
