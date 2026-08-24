@@ -238,6 +238,17 @@ export interface CertificatesTable extends TimestampedTable {
   revocation_reason: string | null;
 }
 
+export interface CertificateIssuanceSnapshotsTable {
+  certificate_id: string;
+  organization_id: string;
+  snapshot_schema_version: Generated<number>;
+  recipient_display_name: string;
+  project_name: string;
+  training_name: string;
+  training_code: string;
+  created_at: GeneratedTimestamp;
+}
+
 export interface CertificateGenerationItemsTable extends TimestampedTable {
   organization_id: string;
   job_id: string;
@@ -297,6 +308,7 @@ export interface Database {
   training_participants: TrainingParticipantsTable;
   certificate_generation_jobs: CertificateGenerationJobsTable;
   certificates: CertificatesTable;
+  certificate_issuance_snapshots: CertificateIssuanceSnapshotsTable;
   certificate_generation_items: CertificateGenerationItemsTable;
   audit_logs: AuditLogsTable;
   verification_events: VerificationEventsTable;

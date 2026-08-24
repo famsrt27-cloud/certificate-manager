@@ -20,6 +20,10 @@ Certificate Management & Public Verification Platform.
 - Prefer small, reviewable changes.
 - Keep certificate rendering deterministic and versioned.
 - Certificate PDFs must remain tied to the template version used to issue them.
+- Certificate issuance identity and the issuance-time binding snapshot are immutable.
+- Renderers must consume immutable/versioned certificate inputs, never mutable live participant/project/training rows.
+- A revoked certificate is terminal and must never become available again.
+- Stale generation revisions must never overwrite the current certificate revision or PDF identity.
 
 ## Security rules
 - Use cryptographically secure randomness for public tokens.

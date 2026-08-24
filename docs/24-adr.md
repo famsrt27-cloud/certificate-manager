@@ -205,3 +205,34 @@ Consequences:
 - Redis unavailability fails authenticated operations safely according to the documented availability policy.
 - Bcrypt inputs are validated against its 72-byte boundary.
 - Public verification/download endpoints remain accountless and do not use admin CSRF/session authorization.
+
+## ADR-016: Immutable Certificate Issuance Snapshot and Lifecycle
+
+Status: Accepted
+
+Decision:
+
+Before Phase 5 rendering is implemented:
+
+- create certificates only as revision-1 drafts
+- freeze certificate identity after creation
+- capture one immutable issuance-time snapshot containing the human-readable binding values sourced from participant/project/training data
+- render historical/regenerated PDFs from that snapshot rather than mutable live business rows
+- enforce the initial lifecycle as `DRAFT → GENERATING → AVAILABLE → REVOKED`, with revocation terminal
+- require a succeeded generation item before publishing a PDF revision
+- keep an available certificate available during regeneration and atomically publish only the next revision
+- reject same-revision PDF replacement, revision rollback/skip and immutable generation-job mutation
+
+`ISSUED` and `ARCHIVED` remain reserved certificate enum values until a later reviewed ADR/migration defines their lifecycle semantics.
+
+Reason:
+
+Participant, project and training records remain legitimately editable after issuance. Re-reading those live rows during regeneration or public verification would silently change the historical meaning of an existing certificate. Likewise, an unrestricted lifecycle or same-revision PDF update could let a stale worker resurrect a revoked certificate or overwrite a newer PDF. The database therefore owns these integrity boundaries in addition to application-level compare-and-swap logic.
+
+Consequences:
+
+- Phase 5 must create the certificate and its issuance snapshot atomically before generation starts.
+- Phase 5 worker finalization must mark the generation item successful and publish the certificate revision in one controlled transaction.
+- Regeneration does not change the original issuance snapshot or `issued_at`.
+- A revoked certificate is never regenerated or transitioned back to an available state.
+- Later lifecycle expansion requires an explicit migration and ADR update rather than weakening the trigger in application code.

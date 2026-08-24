@@ -11,6 +11,21 @@
 
 PostgreSQL remains authoritative for job/item and certificate lifecycle state.
 
+## Pre-Phase 5 certificate integrity contract
+
+Before PDFKit/qrcode generation code is introduced, the database locks these invariants:
+
+- Every certificate begins as a clean revision-1 `DRAFT`.
+- Certificate public/internal issuance identity is immutable after creation.
+- The certificate stores one immutable issuance-time snapshot of recipient display name, project name, training name and training code. Rendering must use this snapshot rather than re-reading mutable live rows.
+- A certificate cannot enter `GENERATING` without that snapshot.
+- The initial lifecycle is `DRAFT → GENERATING → AVAILABLE → REVOKED`; revocation is terminal. `ISSUED` and `ARCHIVED` remain reserved enum values until a later reviewed contract defines them.
+- Publication to `AVAILABLE` requires a `SUCCEEDED` generation item for the exact certificate/template/revision.
+- Regeneration is prepared while the current certificate remains `AVAILABLE`. The new PDF is published by atomically advancing exactly one generation revision and swapping its integrity metadata; the original issue time remains unchanged.
+- A worker holding a stale revision cannot replace current PDF metadata. Generation-job detail inputs are immutable after insertion.
+
+These are database invariants, not conventions left only to worker code.
+
 ## Flow
 
 Import
