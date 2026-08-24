@@ -325,7 +325,22 @@ Headers: `Idempotency-Key` required
 }
 ```
 
-An omitted `participant_ids` field means all eligible active training participants. An empty array is invalid. The referenced template version must belong to the active organization and be `PUBLISHED`.
+An omitted `participant_ids` field means all currently eligible active training participants. An empty array is invalid. The referenced template version must belong to the active organization and be `PUBLISHED`.
+
+For initial generation, "eligible" means an active `training_participants` relationship with no certificate history for that organization/training/participant. An explicit participant list must contain unique participants and every requested participant must be eligible; otherwise the whole request conflicts rather than partially issuing. The omitted form filters to the eligible set; if no eligible target remains, the request returns a conflict/no-work result. A revoked historical certificate is not silently treated as initial-generation eligibility: a future explicit reissue operation must create a brand-new certificate identity.
+
+At first successful job creation the API transaction locks/validates the training and published template, resolves the exact participant set, computes the versioned request fingerprint, chooses the current server-side renderer revision, creates the job/detail rows, creates one immutable certificate + issuance snapshot + generation item per target, and writes the durable queue intent before commit. The worker consumes those rows and must never re-resolve a later participant population.
+
+Idempotency behavior is request-bound:
+
+- the stored generation detail records `selection_mode`, a SHA-256 request fingerprint and `renderer_revision`
+- the fingerprint binds organization, operation version, training, template version, selection mode and the exact first-resolved participant IDs in canonical sorted order
+- `renderer_revision` is a server-selected durable execution input, not a client field and not part of the client request fingerprint
+- an existing idempotency key with different training/template/selection semantics returns HTTP `409`
+- an `EXPLICIT` retry compares the normalized explicit set to the stored fingerprint
+- an `ALL_ELIGIBLE` retry for an already-created job returns that original job without re-resolving the now-current eligible population
+
+The issuance snapshot also stores the planned issue timestamp. The renderer binds that durable value, and initial publication must persist the same timestamp into `certificates.issued_at`.
 
 Response `202`:
 

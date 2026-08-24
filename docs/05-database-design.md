@@ -60,6 +60,8 @@ Import source objects are removed after validation staging. Successful confirmat
 - `jobs` stores shared state, progress, attempts and organization-scoped idempotency keys.
 - Job detail tables bind a job to its domain inputs.
 - Certificate generation uses item rows with a deterministic `(certificate_id, generation_revision)` uniqueness boundary.
+- Generation-job detail stores immutable `selection_mode`, a 32-byte request fingerprint of the exact first-resolved participant set and the server-selected `renderer_revision`.
+- An omitted participant list is resolved exactly once at first job creation; the resulting participant set is materialized as certificate/item rows in the same PostgreSQL transaction before queue intent becomes visible. Workers never re-resolve "all eligible" from mutable live rows.
 - Retried work updates the same item/revision and cannot create a duplicate certificate.
 - `DEAD_LETTER` is an explicit terminal state requiring controlled operator action.
 - BullMQ is the delivery mechanism; PostgreSQL job/item state remains authoritative for progress, idempotency and recovery.
@@ -77,11 +79,12 @@ Import source objects are removed after validation staging. Successful confirmat
 
 - A certificate is created only as a clean `DRAFT` at generation revision 1.
 - Certificate identity is immutable after creation: public identifier, organization, training, participant, published template version and certificate number cannot be replaced.
-- Before a certificate may enter `GENERATING`, one immutable `certificate_issuance_snapshots` row must capture the issuance-time recipient display name, project name, training name and training code. Later edits to the live participant/project/training rows do not alter historical rendering or public verification meaning.
+- Before a certificate may enter `GENERATING`, one immutable `certificate_issuance_snapshots` row must capture the issuance-time recipient display name, project name, training name, training code and planned `issued_at`. Later edits to the live participant/project/training rows do not alter historical rendering or public verification meaning.
 - Snapshot rows are append-once: they may be inserted only while the parent certificate is `DRAFT` and cannot be updated or deleted.
 - The Phase 5 initial lifecycle is `DRAFT → GENERATING → AVAILABLE → REVOKED`. `REVOKED` is terminal. Existing enum states `ISSUED` and `ARCHIVED` are reserved and are not entered by the Phase 5 contract until a later reviewed migration explicitly defines their semantics.
 - `AVAILABLE` requires issue timestamp, private storage key, SHA-256 hash, size and `application/pdf` MIME metadata.
-- Initial publication and regeneration publication require a `SUCCEEDED` generation item for the exact certificate, template and revision.
+- Initial publication and regeneration publication require a `SUCCEEDED` generation item for the exact certificate, template and revision. Initial publication must persist the exact planned `issued_at` from the immutable issuance snapshot.
+- At most one non-revoked certificate may exist for one organization/training/participant tuple. Initial generation treats any certificate history as ineligible for a new initial issue; after revocation, a brand-new certificate/public identifier/number may be created only by an explicit reissue operation defined by a reviewed API contract.
 - Regeneration keeps an already-available certificate available while rendering the next revision. Publishing a regenerated PDF atomically advances `generation_revision` by exactly one and replaces the PDF integrity metadata. The original `issued_at` does not change.
 - PDF identity cannot be overwritten without a revision advance. This makes stale workers fail closed after another worker has already published the same or a newer revision.
 - Certificate generation-job detail rows are immutable durable inputs after insertion.

@@ -12,6 +12,7 @@ export type RoleCode = "SUPER_ADMIN" | "ORG_ADMIN" | "CERTIFICATE_MANAGER" | "TE
 export type JobType = "PARTICIPANT_IMPORT" | "CERTIFICATE_GENERATION";
 export type JobStatus = "QUEUED" | "RUNNING" | "AWAITING_CONFIRMATION" | "SUCCEEDED" | "FAILED" | "DEAD_LETTER" | "CANCELLED";
 export type JobItemStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "DEAD_LETTER" | "SKIPPED";
+export type CertificateGenerationSelectionMode = "ALL_ELIGIBLE" | "EXPLICIT";
 export type ImportRowStatus = "PENDING" | "VALID" | "INVALID" | "IMPORTED" | "FAILED";
 export type TemplateAssetStatus = "QUARANTINED" | "ACTIVE" | "REJECTED" | "ARCHIVED";
 
@@ -218,6 +219,9 @@ export interface CertificateGenerationJobsTable {
   training_id: string;
   template_version_id: string;
   generation_revision: Generated<number>;
+  selection_mode: CertificateGenerationSelectionMode;
+  request_fingerprint: Uint8Array;
+  renderer_revision: string;
 }
 
 export interface CertificatesTable extends TimestampedTable {
@@ -246,6 +250,7 @@ export interface CertificateIssuanceSnapshotsTable {
   project_name: string;
   training_name: string;
   training_code: string;
+  issued_at: Timestamp;
   created_at: GeneratedTimestamp;
 }
 

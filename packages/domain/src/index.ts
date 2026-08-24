@@ -13,3 +13,16 @@ export {
   type RawParticipantImportRow,
   type ValidatedParticipantImportRow
 } from "./participant-import-policy.js";
+export {
+  CERTIFICATE_GENERATION_REQUEST_FINGERPRINT_VERSION,
+  CERTIFICATE_RENDERER_REVISION_PATTERN,
+  canPlanCertificateIssue,
+  canonicalizeGenerationParticipantIds,
+  createCertificateGenerationRequestFingerprint,
+  isCertificateLifecycleTransitionAllowed,
+  validateRendererRevision,
+  type CertificateGenerationRequestFingerprintInput,
+  type CertificateGenerationSelectionMode,
+  type CertificateIssueOperation,
+  type CertificateLifecycleStatus
+} from "./certificate-generation-policy.js";

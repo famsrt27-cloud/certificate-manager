@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integrationEnabled = databaseUrl !== undefined
   && new URL(databaseUrl).pathname.toLowerCase().includes("test");
+const plannedIssuedAt = new Date("2026-08-24T07:00:00.000Z");
 
 describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integration", () => {
   const database = createDatabase({ connectionString: databaseUrl!, maxConnections: 2 });
@@ -14,7 +15,7 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
   const membershipId = randomUUID();
   const projectId = randomUUID();
   const trainingId = randomUUID();
-  const participantId = randomUUID();
+  const baselineParticipantId = randomUUID();
   const templateId = randomUUID();
   const templateVersionId = randomUUID();
 
@@ -52,16 +53,16 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
     }).execute();
 
     await database.insertInto("participants").values({
-      id: participantId,
+      id: baselineParticipantId,
       organization_id: organizationId,
-      display_name: "Original Recipient",
+      display_name: "Baseline Recipient",
       external_reference: null
     }).execute();
 
     await database.insertInto("training_participants").values({
       organization_id: organizationId,
       training_id: trainingId,
-      participant_id: participantId,
+      participant_id: baselineParticipantId,
       source_import_job_id: null
     }).execute();
 
@@ -86,7 +87,28 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
     await closeDatabase(database);
   });
 
-  const createDraftCertificate = async (withSnapshot = true): Promise<string> => {
+  const createEligibleParticipant = async (displayName = "Original Recipient"): Promise<string> => {
+    const participantId = randomUUID();
+    await database.insertInto("participants").values({
+      id: participantId,
+      organization_id: organizationId,
+      display_name: displayName,
+      external_reference: null
+    }).execute();
+    await database.insertInto("training_participants").values({
+      organization_id: organizationId,
+      training_id: trainingId,
+      participant_id: participantId,
+      source_import_job_id: null
+    }).execute();
+    return participantId;
+  };
+
+  const createDraftCertificate = async (input: {
+    readonly withSnapshot?: boolean;
+    readonly participantId?: string;
+  } = {}): Promise<{ certificateId: string; participantId: string }> => {
+    const participantId = input.participantId ?? await createEligibleParticipant();
     const certificateId = randomUUID();
     await database.insertInto("certificates").values({
       id: certificateId,
@@ -97,18 +119,19 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       certificate_number: `CERT-${randomUUID()}`
     }).execute();
 
-    if (withSnapshot) {
+    if (input.withSnapshot !== false) {
       await database.insertInto("certificate_issuance_snapshots").values({
         certificate_id: certificateId,
         organization_id: organizationId,
         recipient_display_name: "Original Recipient",
         project_name: "Original Project",
         training_name: "Original Training",
-        training_code: "ORIGINAL-TRAINING"
+        training_code: "ORIGINAL-TRAINING",
+        issued_at: plannedIssuedAt
       }).execute();
     }
 
-    return certificateId;
+    return { certificateId, participantId };
   };
 
   const createGenerationJob = async (revision: number): Promise<string> => {
@@ -126,7 +149,10 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       organization_id: organizationId,
       training_id: trainingId,
       template_version_id: templateVersionId,
-      generation_revision: revision
+      generation_revision: revision,
+      selection_mode: "EXPLICIT",
+      request_fingerprint: Buffer.alloc(32, Math.max(1, revision % 255)),
+      renderer_revision: "pdfkit-qrcode-v1"
     }).execute();
 
     return jobId;
@@ -144,7 +170,7 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
     return jobId;
   };
 
-  const publishInitialRevision = async (certificateId: string): Promise<Date> => {
+  const publishInitialRevision = async (certificateId: string): Promise<void> => {
     await database.updateTable("certificates")
       .set({ status: "GENERATING", updated_at: new Date() })
       .where("id", "=", certificateId)
@@ -152,22 +178,19 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
 
     await createSucceededItem(certificateId, 1);
 
-    const issuedAt = new Date("2026-08-24T07:00:00.000Z");
     await database.updateTable("certificates").set({
       status: "AVAILABLE",
       pdf_storage_key: `certificates/${certificateId}/1.pdf`,
       pdf_content_sha256: Buffer.alloc(32, 1),
       pdf_size_bytes: "128",
       pdf_mime_type: "application/pdf",
-      issued_at: issuedAt,
+      issued_at: plannedIssuedAt,
       updated_at: new Date()
     }).where("id", "=", certificateId).execute();
-
-    return issuedAt;
   };
 
   it("requires and freezes an issuance snapshot before generation", async () => {
-    const certificateId = await createDraftCertificate(false);
+    const { certificateId, participantId } = await createDraftCertificate({ withSnapshot: false });
 
     await expect(database.updateTable("certificates")
       .set({ status: "GENERATING", updated_at: new Date() })
@@ -180,7 +203,8 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       recipient_display_name: "Original Recipient",
       project_name: "Original Project",
       training_name: "Original Training",
-      training_code: "ORIGINAL-TRAINING"
+      training_code: "ORIGINAL-TRAINING",
+      issued_at: plannedIssuedAt
     }).execute();
 
     await database.updateTable("participants")
@@ -202,18 +226,18 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
         "project_name",
         "training_name",
         "training_code",
-        "snapshot_schema_version"
+        "snapshot_schema_version",
+        "issued_at"
       ])
       .where("certificate_id", "=", certificateId)
       .executeTakeFirstOrThrow();
 
-    expect(snapshot).toEqual({
-      recipient_display_name: "Original Recipient",
-      project_name: "Original Project",
-      training_name: "Original Training",
-      training_code: "ORIGINAL-TRAINING",
-      snapshot_schema_version: 1
-    });
+    expect(snapshot.recipient_display_name).toBe("Original Recipient");
+    expect(snapshot.project_name).toBe("Original Project");
+    expect(snapshot.training_name).toBe("Original Training");
+    expect(snapshot.training_code).toBe("ORIGINAL-TRAINING");
+    expect(snapshot.snapshot_schema_version).toBe(1);
+    expect(snapshot.issued_at.toISOString()).toBe(plannedIssuedAt.toISOString());
 
     await expect(database.updateTable("certificate_issuance_snapshots")
       .set({ recipient_display_name: "Mutated Snapshot" })
@@ -228,19 +252,43 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       .set({ status: "GENERATING", updated_at: new Date() })
       .where("id", "=", certificateId)
       .execute();
+  });
 
-    const state = await database.selectFrom("certificates")
-      .select("status")
+  it("requires initial publication to use the planned immutable issuance time", async () => {
+    const { certificateId } = await createDraftCertificate();
+
+    await database.updateTable("certificates")
+      .set({ status: "GENERATING", updated_at: new Date() })
       .where("id", "=", certificateId)
-      .executeTakeFirstOrThrow();
-    expect(state.status).toBe("GENERATING");
+      .execute();
+    await createSucceededItem(certificateId, 1);
+
+    await expect(database.updateTable("certificates").set({
+      status: "AVAILABLE",
+      pdf_storage_key: `certificates/${certificateId}/wrong-time.pdf`,
+      pdf_content_sha256: Buffer.alloc(32, 7),
+      pdf_size_bytes: "128",
+      pdf_mime_type: "application/pdf",
+      issued_at: new Date("2026-08-25T07:00:00.000Z"),
+      updated_at: new Date()
+    }).where("id", "=", certificateId).execute()).rejects.toMatchObject({ code: "P0001" });
+
+    await database.updateTable("certificates").set({
+      status: "AVAILABLE",
+      pdf_storage_key: `certificates/${certificateId}/1.pdf`,
+      pdf_content_sha256: Buffer.alloc(32, 1),
+      pdf_size_bytes: "128",
+      pdf_mime_type: "application/pdf",
+      issued_at: plannedIssuedAt,
+      updated_at: new Date()
+    }).where("id", "=", certificateId).execute();
   });
 
   it("enforces immutable certificate identity and a terminal revocation lifecycle", async () => {
     await expect(database.insertInto("certificates").values({
       organization_id: organizationId,
       training_id: trainingId,
-      participant_id: participantId,
+      participant_id: baselineParticipantId,
       template_version_id: templateVersionId,
       certificate_number: `CERT-${randomUUID()}`,
       status: "AVAILABLE",
@@ -248,10 +296,10 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       pdf_content_sha256: Buffer.alloc(32, 2),
       pdf_size_bytes: "64",
       pdf_mime_type: "application/pdf",
-      issued_at: new Date()
+      issued_at: plannedIssuedAt
     }).execute()).rejects.toMatchObject({ code: "P0001" });
 
-    const certificateId = await createDraftCertificate();
+    const { certificateId } = await createDraftCertificate();
 
     await expect(database.updateTable("certificates")
       .set({ certificate_number: `MUTATED-${randomUUID()}`, updated_at: new Date() })
@@ -265,10 +313,9 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       .where("id", "=", certificateId)
       .execute()).rejects.toMatchObject({ code: "P0001" });
 
-    const revokedAt = new Date("2026-08-24T08:00:00.000Z");
     await database.updateTable("certificates").set({
       status: "REVOKED",
-      revoked_at: revokedAt,
+      revoked_at: new Date("2026-08-24T08:00:00.000Z"),
       revocation_reason: "Issued in error",
       updated_at: new Date()
     }).where("id", "=", certificateId).execute();
@@ -289,8 +336,8 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
   });
 
   it("rejects stale writers and only publishes the next succeeded generation revision", async () => {
-    const certificateId = await createDraftCertificate();
-    const issuedAt = await publishInitialRevision(certificateId);
+    const { certificateId } = await createDraftCertificate();
+    await publishInitialRevision(certificateId);
 
     await createSucceededItem(certificateId, 2);
     await database.updateTable("certificates").set({
@@ -325,15 +372,6 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       status: "SUCCEEDED"
     }).execute()).rejects.toMatchObject({ code: "P0001" });
 
-    await expect(database.updateTable("certificates").set({
-      generation_revision: 4,
-      pdf_storage_key: `certificates/${certificateId}/4.pdf`,
-      pdf_content_sha256: Buffer.alloc(32, 4),
-      pdf_size_bytes: "512",
-      pdf_mime_type: "application/pdf",
-      updated_at: new Date()
-    }).where("id", "=", certificateId).execute()).rejects.toMatchObject({ code: "P0001" });
-
     await createSucceededItem(certificateId, 3);
     await database.updateTable("certificates").set({
       generation_revision: 3,
@@ -352,10 +390,10 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
     expect(current.status).toBe("AVAILABLE");
     expect(current.generation_revision).toBe(3);
     expect(current.pdf_storage_key).toBe(`certificates/${certificateId}/3.pdf`);
-    expect(current.issued_at?.toISOString()).toBe(issuedAt.toISOString());
+    expect(current.issued_at?.toISOString()).toBe(plannedIssuedAt.toISOString());
   });
 
-  it("makes generation-job detail inputs immutable", async () => {
+  it("makes generation-job request identity and renderer revision immutable", async () => {
     const jobId = await createGenerationJob(1);
 
     await expect(database.updateTable("certificate_generation_jobs")
@@ -363,8 +401,56 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       .where("job_id", "=", jobId)
       .execute()).rejects.toMatchObject({ code: "P0001" });
 
+    await expect(database.updateTable("certificate_generation_jobs")
+      .set({ renderer_revision: "pdfkit-qrcode-v2" })
+      .where("job_id", "=", jobId)
+      .execute()).rejects.toMatchObject({ code: "P0001" });
+
+    await expect(database.updateTable("certificate_generation_jobs")
+      .set({ request_fingerprint: Buffer.alloc(32, 8) })
+      .where("job_id", "=", jobId)
+      .execute()).rejects.toMatchObject({ code: "P0001" });
+
     await expect(database.deleteFrom("certificate_generation_jobs")
       .where("job_id", "=", jobId)
       .execute()).rejects.toMatchObject({ code: "P0001" });
+  });
+
+  it("allows at most one non-revoked certificate and requires a new identity after revocation", async () => {
+    const participantId = await createEligibleParticipant("Reissue Recipient");
+    const first = await createDraftCertificate({ participantId });
+
+    await expect(database.insertInto("certificates").values({
+      organization_id: organizationId,
+      training_id: trainingId,
+      participant_id: participantId,
+      template_version_id: templateVersionId,
+      certificate_number: `CERT-${randomUUID()}`
+    }).execute()).rejects.toMatchObject({ code: "23505" });
+
+    await publishInitialRevision(first.certificateId);
+    await database.updateTable("certificates").set({
+      status: "REVOKED",
+      revoked_at: new Date("2026-08-24T09:00:00.000Z"),
+      revocation_reason: "Reissue approved",
+      updated_at: new Date()
+    }).where("id", "=", first.certificateId).execute();
+
+    const second = await createDraftCertificate({ participantId });
+    expect(second.certificateId).not.toBe(first.certificateId);
+
+    const rows = await database.selectFrom("certificates")
+      .select(["id", "status", "public_identifier", "certificate_number"])
+      .where("organization_id", "=", organizationId)
+      .where("training_id", "=", trainingId)
+      .where("participant_id", "=", participantId)
+      .orderBy("created_at", "asc")
+      .execute();
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.status).toBe("REVOKED");
+    expect(rows[1]?.status).toBe("DRAFT");
+    expect(rows[0]?.public_identifier).not.toBe(rows[1]?.public_identifier);
+    expect(rows[0]?.certificate_number).not.toBe(rows[1]?.certificate_number);
   });
 });

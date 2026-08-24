@@ -236,3 +236,33 @@ Consequences:
 - Regeneration does not change the original issuance snapshot or `issued_at`.
 - A revoked certificate is never regenerated or transitioned back to an available state.
 - Later lifecycle expansion requires an explicit migration and ADR update rather than weakening the trigger in application code.
+
+## ADR-017: Exact Generation Target Set, Planned Issue Time and Explicit Reissue
+
+Status: Accepted
+
+Decision:
+
+Certificate-generation planning is a durable PostgreSQL transaction:
+
+- the client idempotency key is scoped by organization/job type and is bound to immutable generation request identity
+- generation detail stores `selection_mode`, a 32-byte SHA-256 fingerprint of the exact first-resolved participant set and the server-selected renderer revision
+- omitted `participant_ids` resolves `ALL_ELIGIBLE` once; workers and later retries never re-resolve a changed population
+- the transaction materializes certificate identity, one immutable issuance snapshot and one generation item for every selected participant before durable queue intent commits
+- the issuance snapshot includes the planned issue timestamp used by rendering and later copied exactly into `certificates.issued_at`
+- at most one non-revoked certificate may exist for one organization/training/participant
+- initial generation does not silently reissue historical certificates; a new identity after revocation requires an explicit reissue operation
+
+The renderer revision is intentionally stored separately from the client request fingerprint. Replaying an already-created request after a deployment returns the original job and renderer revision instead of changing its execution semantics.
+
+Reason:
+
+A batch request whose membership is resolved later by a worker is not idempotent: participant membership can change between API acceptance, retry and queue delivery. Likewise, selecting issue time during rendering changes certificate bindings across retries. Materializing the exact target set and planned issue time at first acceptance turns generation into durable work against immutable inputs. Separating initial issue from reissue avoids accidental duplicate certificate identities.
+
+Consequences:
+
+- Phase 5 job creation must compare existing idempotency-key semantics before creating any new certificate rows.
+- Explicit participant lists are unique/all-or-conflict; omitted lists resolve only currently eligible initial-issue targets.
+- A retry of an existing `ALL_ELIGIBLE` job returns the original job without re-resolving current participants.
+- Workers may not infer job membership from live training relationships.
+- Reissue requires a later explicit API contract and must create a fresh certificate number/public identifier while retaining revoked history.

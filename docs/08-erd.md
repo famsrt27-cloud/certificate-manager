@@ -209,6 +209,9 @@ erDiagram
       uuid training_id FK
       uuid template_version_id FK
       int generation_revision
+      text selection_mode
+      bytea request_fingerprint
+      text renderer_revision
     }
 
     CERTIFICATES {
@@ -238,6 +241,7 @@ erDiagram
       text project_name
       text training_name
       text training_code
+      timestamptz issued_at
       timestamptz created_at
     }
 
@@ -297,8 +301,10 @@ erDiagram
 8. The initial certificate lifecycle is database-guarded as `DRAFT → GENERATING → AVAILABLE → REVOKED`; revoked certificates are terminal.
 9. `AVAILABLE` certificates require complete PDF integrity metadata, and publication requires a succeeded generation item for the exact revision.
 10. Generation revisions advance exactly one step during regeneration publication; PDF metadata cannot be overwritten at the same revision, so stale writers fail closed.
-11. Generation-job detail rows are immutable. Generation items must target the current revision for initial work or exactly the next revision for regeneration.
-12. Import and generation item triggers require the same training/template/revision as their parent job.
-13. Audit actor membership, organization and user are bound by a composite foreign key; audit log rows are append-only.
+11. Generation-job detail rows are immutable and retain selection mode, exact-target request fingerprint and renderer revision. Generation items must target the current revision for initial work or exactly the next revision for regeneration.
+12. The issuance snapshot includes the planned issue time; initial publication must use that exact timestamp.
+13. A partial unique index permits at most one non-revoked certificate for an organization/training/participant tuple. Revoked history does not reuse certificate identity.
+14. Import and generation item triggers require the same training/template/revision as their parent job.
+15. Audit actor membership, organization and user are bound by a composite foreign key; audit log rows are append-only.
 
 The complete signed verification token is intentionally absent from the database.

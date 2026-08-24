@@ -24,6 +24,9 @@ Certificate Management & Public Verification Platform.
 - Renderers must consume immutable/versioned certificate inputs, never mutable live participant/project/training rows.
 - A revoked certificate is terminal and must never become available again.
 - Stale generation revisions must never overwrite the current certificate revision or PDF identity.
+- Certificate generation idempotency is bound to the exact first-resolved participant set; workers must never re-resolve a later population.
+- Initial generation must not silently reissue a participant with certificate history; reissue requires an explicit reviewed operation after revocation.
+- The planned issuance timestamp and renderer revision are durable immutable generation inputs.
 
 ## Security rules
 - Use cryptographically secure randomness for public tokens.
