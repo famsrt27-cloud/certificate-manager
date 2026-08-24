@@ -56,6 +56,9 @@ jobs:
       - name: Security tests
         run: pnpm test:security
 
+      - name: Docker image build
+        run: pnpm compose:build
+
   integration:
     name: Integration Gate
     runs-on: ubuntu-latest

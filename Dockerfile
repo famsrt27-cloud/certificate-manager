@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM node:24.12.0-alpine AS workspace
+FROM node:24.19.0-alpine AS workspace
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -18,6 +18,7 @@ COPY packages/database/package.json packages/database/package.json
 COPY packages/domain/package.json packages/domain/package.json
 COPY packages/queue/package.json packages/queue/package.json
 COPY packages/storage/package.json packages/storage/package.json
+COPY packages/template-engine/package.json packages/template-engine/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY . .
