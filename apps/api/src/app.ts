@@ -10,6 +10,7 @@ import { registerHealthRoutes, type ReadinessDependencies } from "./routes/healt
 import { registerAdminAuthRoutes, type AdminAuthRouteOptions } from "./routes/admin-auth.js";
 import { registerAdminPhaseThreeRoutes, type AdminPhaseThreeRouteOptions } from "./routes/admin-phase-three.js";
 import { registerAdminPhaseFourRoutes, type AdminPhaseFourRouteOptions } from "./routes/admin-phase-four.js";
+import { registerAdminPhaseFiveRoutes, type AdminPhaseFiveRouteOptions } from "./routes/admin-phase-five.js";
 
 export interface BuildApiOptions {
   readonly dependencies: ReadinessDependencies;
@@ -19,6 +20,7 @@ export interface BuildApiOptions {
   readonly authentication?: AdminAuthRouteOptions;
   readonly phaseThree?: AdminPhaseThreeRouteOptions;
   readonly phaseFour?: AdminPhaseFourRouteOptions;
+  readonly phaseFive?: AdminPhaseFiveRouteOptions;
 }
 
 export const buildApi = ({
@@ -28,7 +30,8 @@ export const buildApi = ({
   logger = true,
   authentication,
   phaseThree,
-  phaseFour
+  phaseFour,
+  phaseFive
 }: BuildApiOptions): FastifyInstance => {
   const app = Fastify({
     genReqId: () => randomUUID(),
@@ -55,5 +58,6 @@ export const buildApi = ({
     registerAdminPhaseThreeRoutes(app, phaseThree);
   }
   if (phaseFour !== undefined) registerAdminPhaseFourRoutes(app, phaseFour);
+  if (phaseFive !== undefined) registerAdminPhaseFiveRoutes(app, phaseFive);
   return app;
 };

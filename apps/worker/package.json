@@ -10,12 +10,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@certificate-platform/certificate-renderer": "workspace:*",
     "@certificate-platform/config": "workspace:*",
     "@certificate-platform/contracts": "workspace:*",
     "@certificate-platform/database": "workspace:*",
     "@certificate-platform/domain": "workspace:*",
     "@certificate-platform/queue": "workspace:*",
     "@certificate-platform/storage": "workspace:*",
+    "@certificate-platform/template-engine": "workspace:*",
     "csv-parse": "7.0.2",
     "exceljs": "4.4.0",
     "fastify": "5.12.0",

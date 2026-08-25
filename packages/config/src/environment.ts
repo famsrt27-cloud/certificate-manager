@@ -33,6 +33,38 @@ const HttpUrlSchema = z.url().refine((value) => {
 
 const EnvironmentBooleanSchema = z.enum(["true", "false"]).transform((value) => value === "true");
 
+const VerificationSigningKeysSchema = z.string().transform((value, context): Readonly<Record<string, Uint8Array>> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    context.addIssue({ code: "custom", message: "must be a JSON object of verification signing keys" });
+    return z.NEVER;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    context.addIssue({ code: "custom", message: "must be a JSON object of verification signing keys" });
+    return z.NEVER;
+  }
+  const keys: Record<string, Uint8Array> = {};
+  for (const [keyId, encoded] of Object.entries(parsed)) {
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(keyId) || typeof encoded !== "string" || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+      context.addIssue({ code: "custom", message: "contains an invalid verification signing key" });
+      return z.NEVER;
+    }
+    const bytes = Buffer.from(encoded, "base64url");
+    if (bytes.byteLength < 32 || bytes.byteLength > 128 || bytes.toString("base64url") !== encoded) {
+      context.addIssue({ code: "custom", message: "contains an invalid verification signing key" });
+      return z.NEVER;
+    }
+    keys[keyId] = new Uint8Array(bytes);
+  }
+  if (Object.keys(keys).length === 0) {
+    context.addIssue({ code: "custom", message: "must contain at least one verification signing key" });
+    return z.NEVER;
+  }
+  return Object.freeze(keys);
+});
+
 const ObjectStorageEnvironmentSchema = z.object({
   OBJECT_STORAGE_ENDPOINT: HttpUrlSchema,
   OBJECT_STORAGE_REGION: z.string().min(1).default("us-east-1"),
@@ -92,6 +124,7 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   LOGIN_RATE_LIMIT_ACCOUNT_MAX: z.coerce.number().int().min(1).max(20).default(5),
   LOGIN_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(100).default(20),
   TEMPLATE_ASSET_MAX_BYTES: z.coerce.number().int().min(1_024).max(10 * 1_024 * 1_024).default(5 * 1_024 * 1_024),
+  VERIFICATION_ACTIVE_KID: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/).default("development-key"),
   ADMIN_MFA_POLICY: z.literal("DEFERRED_NON_PRODUCTION").default("DEFERRED_NON_PRODUCTION"),
   ...ObjectStorageEnvironmentSchema.shape
 }).superRefine((environment, context) => {
@@ -124,7 +157,16 @@ export const WorkerEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   WORKER_HOST: z.string().min(1).default("0.0.0.0"),
   WORKER_HEALTH_PORT: PortSchema.default(3_002),
   PARTICIPANT_IMPORT_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(2),
+  CERTIFICATE_GENERATION_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(2),
+  CERTIFICATE_RENDER_MAX_ASSET_BYTES: z.coerce.number().int().min(1_024).max(50 * 1_024 * 1_024).default(10 * 1_024 * 1_024),
+  CERTIFICATE_PDF_MAX_BYTES: z.coerce.number().int().min(1_024).max(50 * 1_024 * 1_024).default(10 * 1_024 * 1_024),
+  VERIFICATION_PUBLIC_BASE_URL: HttpUrlSchema,
+  VERIFICATION_SIGNING_KEYS_JSON: VerificationSigningKeysSchema,
   ...ObjectStorageEnvironmentSchema.shape
+}).superRefine((environment, context) => {
+  if (environment.NODE_ENV === "production" && !environment.VERIFICATION_PUBLIC_BASE_URL.startsWith("https://")) {
+    context.addIssue({ code: "custom", path: ["VERIFICATION_PUBLIC_BASE_URL"], message: "must use HTTPS in production" });
+  }
 });
 
 export const WebPublicEnvironmentSchema = z.object({

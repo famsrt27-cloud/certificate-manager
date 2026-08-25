@@ -26,3 +26,8 @@ export {
   type CertificateIssueOperation,
   type CertificateLifecycleStatus
 } from "./certificate-generation-policy.js";
+export {
+  createCertificateVerificationToken,
+  createCertificateVerificationUrl,
+  type CertificateVerificationTokenInput
+} from "./certificate-verification-token.js";

@@ -6,6 +6,8 @@ import {
   createParticipantImport
 } from "@certificate-platform/database";
 import type {
+  CertificateGenerationJobPayload,
+  CertificateGenerationProducer,
   ParticipantImportJobPayload,
   ParticipantImportProducer
 } from "@certificate-platform/queue";
@@ -92,6 +94,17 @@ describe.skipIf(!integrationEnabled)("queue outbox dispatcher PostgreSQL integra
     close: async () => undefined
   });
 
+  const generationProducer = (
+    deliveries: CertificateGenerationJobPayload[] = [],
+    shouldFail: () => boolean = () => false
+  ): CertificateGenerationProducer => ({
+    enqueue: async (payload) => {
+      if (shouldFail()) throw new Error("synthetic queue unavailable");
+      deliveries.push(payload);
+    },
+    close: async () => undefined
+  });
+
   it("keeps a failed dispatch durable and recovers it on a later dispatcher run", async () => {
     const jobId = randomUUID();
     expect(await createImport(jobId)).toBe(true);
@@ -101,13 +114,13 @@ describe.skipIf(!integrationEnabled)("queue outbox dispatcher PostgreSQL integra
     const first = new QueueOutboxDispatcher({
       database,
       participantImports: producer(deliveries, () => queueUnavailable),
+      certificateGenerations: generationProducer(),
       retryDelayMs: 0,
       reconcileAfterMs: 60_000
     });
     const failedDispatch = await first.dispatchOnce();
     expect(failedDispatch.claimed).toBeGreaterThanOrEqual(1);
-    expect(failedDispatch.dispatched).toBe(0);
-    expect(failedDispatch.failed).toBe(failedDispatch.claimed);
+    expect(failedDispatch.failed).toBeGreaterThanOrEqual(1);
 
     const failed = await database.selectFrom("queue_outbox")
       .select(["dispatched_at", "attempt_count", "last_error_code"])
@@ -122,6 +135,7 @@ describe.skipIf(!integrationEnabled)("queue outbox dispatcher PostgreSQL integra
     const restarted = new QueueOutboxDispatcher({
       database,
       participantImports: producer(deliveries, () => queueUnavailable),
+      certificateGenerations: generationProducer(),
       retryDelayMs: 0,
       reconcileAfterMs: 60_000
     });
@@ -175,6 +189,48 @@ describe.skipIf(!integrationEnabled)("queue outbox dispatcher PostgreSQL integra
       .executeTakeFirstOrThrow();
     expect(row.attempt_count).toBe(1);
     expect(row.dispatched_at).not.toBeNull();
+  });
+
+  it("keeps certificate generation dispatch retryable until queue recovery", async () => {
+    const jobId = randomUUID();
+    await database.insertInto("jobs").values({ id: jobId, organization_id: organizationId, job_type: "CERTIFICATE_GENERATION", idempotency_key: `generation-${jobId}`, requested_by_membership_id: membershipId }).execute();
+    await database.insertInto("queue_outbox").values({ organization_id: organizationId, message_type: "CERTIFICATE_GENERATION", deduplication_key: `${jobId}-generate`, payload_json: { version: 1, job_id: jobId, organization_id: organizationId } }).execute();
+    const deliveries: CertificateGenerationJobPayload[] = [];
+    let unavailable = true;
+    const generation = generationProducer(deliveries, () => unavailable);
+    const imports = producer([]);
+    expect((await new QueueOutboxDispatcher({ database, participantImports: imports, certificateGenerations: generation, retryDelayMs: 0, reconcileAfterMs: 60_000 }).dispatchOnce()).failed).toBeGreaterThan(0);
+    expect((await database.selectFrom("queue_outbox").select("dispatched_at").where("deduplication_key", "=", `${jobId}-generate`).executeTakeFirstOrThrow()).dispatched_at).toBeNull();
+    unavailable = false;
+    await new QueueOutboxDispatcher({ database, participantImports: imports, certificateGenerations: generation, retryDelayMs: 0, reconcileAfterMs: 60_000 }).dispatchOnce();
+    expect(deliveries.filter((payload) => payload.job_id === jobId)).toEqual([{ version: 1, job_id: jobId, organization_id: organizationId }]);
+    expect((await database.selectFrom("queue_outbox").select("dispatched_at").where("deduplication_key", "=", `${jobId}-generate`).executeTakeFirstOrThrow()).dispatched_at).not.toBeNull();
+  });
+
+  it("rejects malformed certificate generation payloads without false delivery", async () => {
+    const jobId = randomUUID();
+    await database.insertInto("jobs").values({ id: jobId, organization_id: organizationId, job_type: "CERTIFICATE_GENERATION", idempotency_key: `malformed-${jobId}`, requested_by_membership_id: membershipId }).execute();
+    await database.insertInto("queue_outbox").values({
+      organization_id: organizationId,
+      message_type: "CERTIFICATE_GENERATION",
+      deduplication_key: `${jobId}-generate`,
+      payload_json: { version: 1, job_id: jobId, organization_id: organizationId, token: "must-not-dispatch" },
+      created_at: new Date("1800-01-01T00:00:00.000Z")
+    }).execute();
+    const deliveries: CertificateGenerationJobPayload[] = [];
+    const result = await new QueueOutboxDispatcher({
+      database,
+      participantImports: producer([]),
+      certificateGenerations: generationProducer(deliveries),
+      batchSize: 1,
+      retryDelayMs: 0,
+      reconcileAfterMs: 60_000
+    }).dispatchOnce();
+    expect(result).toEqual({ claimed: 1, dispatched: 0, failed: 1 });
+    expect(deliveries).toHaveLength(0);
+    expect(await database.selectFrom("queue_outbox").select(["dispatched_at", "last_error_code"])
+      .where("deduplication_key", "=", `${jobId}-generate`).executeTakeFirstOrThrow())
+      .toEqual({ dispatched_at: null, last_error_code: "OUTBOX_PAYLOAD_INVALID" });
   });
 
   it("re-arms a dispatched message when PostgreSQL still shows an unstarted queued job", async () => {

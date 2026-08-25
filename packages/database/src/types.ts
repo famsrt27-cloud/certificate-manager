@@ -231,6 +231,7 @@ export interface CertificatesTable extends TimestampedTable {
   participant_id: string;
   template_version_id: string;
   certificate_number: string;
+  verification_key_kid: string | null;
   status: Generated<CertificateStatus>;
   generation_revision: Generated<number>;
   pdf_storage_key: string | null;

@@ -6,3 +6,4 @@ export {
   type CertificateRenderBoundaryOptions,
   type CertificateRenderInput
 } from "./render-input.js";
+export { renderCertificatePdf, type CertificatePdfRenderOptions } from "./render.js";

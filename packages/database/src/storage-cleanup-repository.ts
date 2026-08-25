@@ -17,7 +17,11 @@ export const armStorageCleanup = async (
     organization_id: input.organizationId,
     object_key: input.objectKey,
     not_before: input.notBefore
-  }).execute();
+  }).onConflict((conflict) => conflict.column("object_key").doUpdateSet({
+    not_before: input.notBefore,
+    last_attempt_at: null,
+    last_error_code: null
+  })).execute();
 };
 
 export const cancelStorageCleanupInTransaction = async (

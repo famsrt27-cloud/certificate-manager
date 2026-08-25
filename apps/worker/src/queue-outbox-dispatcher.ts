@@ -10,10 +10,12 @@ import {
   type ParticipantImportJobPayload,
   type ParticipantImportProducer
 } from "@certificate-platform/queue";
+import { CertificateGenerationJobPayloadSchema, type CertificateGenerationProducer } from "@certificate-platform/queue";
 
 export interface QueueOutboxDispatcherOptions {
   readonly database: DatabaseClient;
   readonly participantImports: ParticipantImportProducer;
+  readonly certificateGenerations?: CertificateGenerationProducer;
   readonly batchSize?: number;
   readonly retryDelayMs?: number;
   readonly reconcileAfterMs?: number;
@@ -44,6 +46,7 @@ const validateParticipantImportMessage = (
 export class QueueOutboxDispatcher {
   readonly #database: DatabaseClient;
   readonly #participantImports: ParticipantImportProducer;
+  readonly #certificateGenerations?: CertificateGenerationProducer;
   readonly #batchSize: number;
   readonly #retryDelayMs: number;
   readonly #reconcileAfterMs: number;
@@ -52,6 +55,7 @@ export class QueueOutboxDispatcher {
   constructor(options: QueueOutboxDispatcherOptions) {
     this.#database = options.database;
     this.#participantImports = options.participantImports;
+    if (options.certificateGenerations !== undefined) this.#certificateGenerations = options.certificateGenerations;
     this.#batchSize = options.batchSize ?? 100;
     this.#retryDelayMs = options.retryDelayMs ?? 5_000;
     this.#reconcileAfterMs = options.reconcileAfterMs ?? 30_000;
@@ -82,9 +86,12 @@ export class QueueOutboxDispatcher {
     let dispatched = 0;
     let failed = 0;
     for (const row of rows) {
-      let payload: ParticipantImportJobPayload;
+      let payload: ParticipantImportJobPayload | ReturnType<typeof CertificateGenerationJobPayloadSchema.parse>;
       try {
-        payload = validateParticipantImportMessage(row.messageType, row.organizationId, row.payloadJson);
+        if (row.messageType === "CERTIFICATE_GENERATION") {
+          payload = CertificateGenerationJobPayloadSchema.parse(row.payloadJson);
+          if (payload.organization_id !== row.organizationId || this.#certificateGenerations === undefined) throw new Error("OUTBOX_PAYLOAD_INVALID");
+        } else payload = validateParticipantImportMessage(row.messageType, row.organizationId, row.payloadJson);
       } catch {
         await markQueueOutboxFailed(this.#database, row.id, "OUTBOX_PAYLOAD_INVALID");
         failed += 1;
@@ -92,7 +99,8 @@ export class QueueOutboxDispatcher {
       }
 
       try {
-        await this.#participantImports.enqueue(payload);
+        if (row.messageType === "CERTIFICATE_GENERATION") await this.#certificateGenerations!.enqueue(CertificateGenerationJobPayloadSchema.parse(payload));
+        else await this.#participantImports.enqueue(ParticipantImportJobPayloadSchema.parse(payload));
       } catch {
         await markQueueOutboxFailed(this.#database, row.id, "QUEUE_DISPATCH_FAILED");
         failed += 1;

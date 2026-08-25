@@ -116,7 +116,8 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       training_id: trainingId,
       participant_id: participantId,
       template_version_id: templateVersionId,
-      certificate_number: `CERT-${randomUUID()}`
+      certificate_number: `CERT-${randomUUID()}`,
+      verification_key_kid: "test-verification-key"
     }).execute();
 
     if (input.withSnapshot !== false) {
@@ -291,6 +292,7 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       participant_id: baselineParticipantId,
       template_version_id: templateVersionId,
       certificate_number: `CERT-${randomUUID()}`,
+      verification_key_kid: "test-verification-key",
       status: "AVAILABLE",
       pdf_storage_key: "forbidden.pdf",
       pdf_content_sha256: Buffer.alloc(32, 2),
@@ -416,6 +418,13 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       .execute()).rejects.toMatchObject({ code: "P0001" });
   });
 
+  it("preserves legacy null kids but requires immutable valid kids for new certificates", async () => {
+    const legacy = await createDraftCertificate();
+    await database.updateTable("certificates").set({ updated_at: new Date() }).where("id", "=", legacy.certificateId).execute();
+    await expect(database.updateTable("certificates").set({ verification_key_kid: "changed", updated_at: new Date() })
+      .where("id", "=", legacy.certificateId).execute()).rejects.toMatchObject({ code: "P0001" });
+  });
+
   it("allows at most one non-revoked certificate and requires a new identity after revocation", async () => {
     const participantId = await createEligibleParticipant("Reissue Recipient");
     const first = await createDraftCertificate({ participantId });
@@ -425,7 +434,8 @@ describe.skipIf(!integrationEnabled)("certificate integrity PostgreSQL integrati
       training_id: trainingId,
       participant_id: participantId,
       template_version_id: templateVersionId,
-      certificate_number: `CERT-${randomUUID()}`
+      certificate_number: `CERT-${randomUUID()}`,
+      verification_key_kid: "test-verification-key"
     }).execute()).rejects.toMatchObject({ code: "23505" });
 
     await publishInitialRevision(first.certificateId);

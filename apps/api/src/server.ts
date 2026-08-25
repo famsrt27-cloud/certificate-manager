@@ -22,6 +22,7 @@ import { AuthenticationService } from "./modules/auth/authentication-service.js"
 import { OrganizationAuthorizationService } from "./modules/auth/organization-authorization-service.js";
 import { PhaseThreeService } from "./modules/phase-three/phase-three-service.js";
 import { PhaseFourService } from "./modules/phase-four/phase-four-service.js";
+import { PhaseFiveService } from "./modules/phase-five/phase-five-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -91,6 +92,7 @@ const phaseThreeService = new PhaseThreeService({
   cursorSecret: environment.SESSION_SECRET
 });
 const phaseFourService = new PhaseFourService({ database, storage, cursorSecret: environment.SESSION_SECRET });
+const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID });
 
 const app = buildApi({
   dependencies: {
@@ -114,7 +116,8 @@ const app = buildApi({
     authorization,
     service: phaseFourService,
     templateAssetMaxBytes: environment.TEMPLATE_ASSET_MAX_BYTES
-  }
+  },
+  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService }
 });
 
 let stopping = false;
