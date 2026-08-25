@@ -10,11 +10,19 @@
     }
   },
   "scripts": {
+    "generate:bundled-fonts": "node scripts/generate-bundled-fonts.mjs",
+    "prebuild": "pnpm run generate:bundled-fonts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@certificate-platform/template-engine": "workspace:*",
+    "pdfkit": "0.17.2",
+    "qrcode": "1.5.4",
     "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/pdfkit": "0.17.0",
+    "@types/qrcode": "1.5.5"
   }
 }

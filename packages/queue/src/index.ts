@@ -18,3 +18,4 @@ export {
   type ParticipantImportWorkerHandle,
   type ParticipantImportWorkerOptions
 } from "./participant-import-queue.js";
+export * from "./certificate-generation-queue.js";

@@ -92,6 +92,7 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   LOGIN_RATE_LIMIT_ACCOUNT_MAX: z.coerce.number().int().min(1).max(20).default(5),
   LOGIN_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(100).default(20),
   TEMPLATE_ASSET_MAX_BYTES: z.coerce.number().int().min(1_024).max(10 * 1_024 * 1_024).default(5 * 1_024 * 1_024),
+  VERIFICATION_ACTIVE_KID: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/).default("development-key"),
   ADMIN_MFA_POLICY: z.literal("DEFERRED_NON_PRODUCTION").default("DEFERRED_NON_PRODUCTION"),
   ...ObjectStorageEnvironmentSchema.shape
 }).superRefine((environment, context) => {

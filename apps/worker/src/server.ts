@@ -5,6 +5,7 @@ import {
   closeRedis,
   connectRedis,
   createBullMqRedisConnection,
+  createCertificateGenerationProducer,
   createParticipantImportProducer,
   createParticipantImportWorker,
   createRedisConnection
@@ -61,9 +62,11 @@ const participantImportWorker = createParticipantImportWorker({
   onFinalFailure: (payload) => participantImportProcessor.handleFinalFailure(payload)
 });
 const participantImports = createParticipantImportProducer(dispatcherRedis, environment.BULLMQ_PREFIX);
+const certificateGenerations = createCertificateGenerationProducer(dispatcherRedis, environment.BULLMQ_PREFIX);
 const queueOutboxDispatcher = new QueueOutboxDispatcher({
   database,
   participantImports,
+  certificateGenerations,
   batchSize: 100,
   retryDelayMs: 5_000,
   reconcileAfterMs: 30_000
@@ -178,7 +181,7 @@ const shutdown = async (signal: string): Promise<void> => {
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
   if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
-  await Promise.allSettled([participantImportWorker.close(), participantImports.close()]);
+  await Promise.allSettled([participantImportWorker.close(), participantImports.close(), certificateGenerations.close()]);
   s3.destroy();
   await Promise.allSettled([
     closeDatabase(database),
@@ -201,7 +204,7 @@ try {
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
   if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
-  await Promise.allSettled([participantImportWorker.close(), participantImports.close()]);
+  await Promise.allSettled([participantImportWorker.close(), participantImports.close(), certificateGenerations.close()]);
   s3.destroy();
   await Promise.allSettled([
     closeDatabase(database),
