@@ -38,6 +38,8 @@ Generation queue, workers, PDF, storage, QR.
 
 Entry contract: read migrations 006/007 and ADR-016 through ADR-018 first. Phase 5 must materialize exact generation targets transactionally, render from immutable issuance snapshots/planned issue time, retain renderer revision, use durable queue/storage reconciliation, and call the strict `packages/certificate-renderer` boundary rather than giving rendering infrastructure capabilities.
 
+Status: Implemented on 2026-08-25. Completion evidence covers the authenticated generation API through transactional planning, PostgreSQL outbox dispatch, BullMQ execution, immutable snapshot/template rendering, QR/PDF generation, private S3-compatible storage publication, integrity metadata, idempotent redelivery, multi-item retry/progress, terminal revocation protection and storage cleanup reconciliation. Public verification and download remain Phase 6.
+
 ## Phase 6 — Public Verification
 Verification, stateless token, rate limiting, secure download.
 

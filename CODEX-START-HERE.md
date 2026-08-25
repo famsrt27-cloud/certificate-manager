@@ -30,7 +30,7 @@
 
 - Phases 1–4 are implemented.
 - Phase 4.5 stabilization/integrity work establishes the entry contract for Phase 5.
-- Phase 5 application/worker PDF generation is not implemented yet.
+- Phase 5 certificate generation is implemented, including durable planning/outbox delivery, BullMQ processing, immutable snapshot rendering, QR/PDF generation, private storage publication, integrity metadata, retry/dead-letter behavior and storage reconciliation.
 - `docs/09-postgresql-schema.sql` and `packages/database/schema/0001-canonical-schema.sql` are frozen migration-0001 snapshots. Do not edit them to represent later schema changes; use append-only migrations.
 - Read migrations `202608240006_certificate-integrity-foundation.ts` and `202608240007_certificate-generation-contract.ts` before implementing certificate generation.
 - Read ADR-016, ADR-017 and ADR-018 before touching certificate lifecycle, job planning, regeneration, reissue, verification URL or renderer code.

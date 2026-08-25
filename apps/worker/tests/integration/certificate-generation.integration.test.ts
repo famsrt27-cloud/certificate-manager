@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { CertificateRenderInput } from "@certificate-platform/certificate-renderer";
 import {
+  armStorageCleanup,
   closeDatabase,
   createDatabase,
   planCertificateGeneration,
@@ -112,6 +113,25 @@ describe.skipIf(!enabled)("certificate generation worker PostgreSQL integration"
     return { participantId, jobId: result.jobId, ...item };
   };
 
+  const planMany = async (names: readonly string[]) => {
+    const participantIds: string[] = [];
+    for (const name of names) {
+      const participantId = randomUUID();
+      participantIds.push(participantId);
+      await database.insertInto("participants").values({ id: participantId, organization_id: organizationId, display_name: name, external_reference: null }).execute();
+      await database.insertInto("training_participants").values({ organization_id: organizationId, training_id: trainingId, participant_id: participantId, source_import_job_id: null }).execute();
+    }
+    const result = await planCertificateGeneration(database, {
+      organizationId, trainingId, templateVersionId, idempotencyKey: `worker-many-${randomUUID()}`,
+      requestedByMembershipId: membershipId, selectionMode: "EXPLICIT", requestedParticipantIds: participantIds,
+      rendererRevision: "pdfkit-qrcode-v1", verificationKeyKid: "key-2026-01", plannedIssuedAt
+    });
+    if (result.kind !== "CREATED") throw new Error(`planning failed: ${result.kind}`);
+    const items = await database.selectFrom("certificate_generation_items").select(["id", "certificate_id", "generation_revision"])
+      .where("job_id", "=", result.jobId).orderBy("created_at", "asc").orderBy("id", "asc").execute();
+    return { jobId: result.jobId, items };
+  };
+
   const processor = (storage: PrivateObjectStorage, overrides: Partial<ConstructorParameters<typeof CertificateGenerationProcessor>[0]> = {}) =>
     new CertificateGenerationProcessor({ database, storage, verificationBaseUrl: "https://verify.example.invalid",
       verificationKeys: new Map([["key-2026-01", signingKey]]), maximumAssetBytes: 2_000_000, maximumPdfBytes: 2_000_000,
@@ -137,6 +157,11 @@ describe.skipIf(!enabled)("certificate generation worker PostgreSQL integration"
     expect((await database.selectFrom("certificate_generation_items").select("status").where("id", "=", planned.id).executeTakeFirstOrThrow()).status).toBe("SUCCEEDED");
     expect(await database.selectFrom("jobs").select(["status", "progress_completed"]).where("id", "=", planned.jobId).executeTakeFirstOrThrow()).toEqual({ status: "SUCCEEDED", progress_completed: 1 });
     expect(await database.selectFrom("storage_cleanup_outbox").select("id").where("object_key", "=", storage.inputs[0]!.key).execute()).toHaveLength(0);
+
+    await armStorageCleanup(database, { organizationId, objectKey: storage.inputs[0]!.key, notBefore: new Date("2000-01-01T00:00:00.000Z") });
+    expect(await new StorageCleanupReconciler({ database, storage, batchSize: 10, retryDelayMs: 0 }).runOnce())
+      .toMatchObject({ protected: 1, deleted: 0, failed: 0 });
+    expect(storage.objects.has(storage.inputs[0]!.key)).toBe(true);
 
     await processor(storage).process({ version: 1, job_id: planned.jobId, organization_id: organizationId });
     expect(storage.inputs).toHaveLength(1);
@@ -250,5 +275,63 @@ describe.skipIf(!enabled)("certificate generation worker PostgreSQL integration"
     expect((await database.selectFrom("jobs").select("status").where("id", "=", planned.jobId).executeTakeFirstOrThrow()).status).toBe("DEAD_LETTER");
     expect((await database.selectFrom("certificate_generation_items").select("status").where("id", "=", planned.id).executeTakeFirstOrThrow()).status).toBe("DEAD_LETTER");
     expect((await database.selectFrom("certificates").select("status").where("id", "=", planned.certificate_id).executeTakeFirstOrThrow()).status).toBe("DRAFT");
+  });
+
+  it("recovers a multi-item job without double-counting an already published item", async () => {
+    const planned = await planMany(["Multi Item A", "Multi Item B"]);
+    const storage = new MemoryStorage();
+    let renderCount = 0;
+    let failSecond = true;
+    const render = async (): Promise<Uint8Array> => {
+      renderCount += 1;
+      if (renderCount === 2 && failSecond) throw new Error("synthetic transient renderer failure");
+      return minimalPdf;
+    };
+    const generationProcessor = processor(storage, { render });
+    await expect(generationProcessor.process({ version: 1, job_id: planned.jobId, organization_id: organizationId }))
+      .rejects.toThrow("synthetic transient renderer failure");
+    expect(await database.selectFrom("jobs").select(["status", "progress_total", "progress_completed"])
+      .where("id", "=", planned.jobId).executeTakeFirstOrThrow()).toEqual({ status: "RUNNING", progress_total: 2, progress_completed: 1 });
+    expect((await database.selectFrom("certificate_generation_items").select("status").where("job_id", "=", planned.jobId).execute())
+      .map((item) => item.status).sort()).toEqual(["FAILED", "SUCCEEDED"]);
+
+    failSecond = false;
+    await generationProcessor.process({ version: 1, job_id: planned.jobId, organization_id: organizationId });
+    expect(renderCount).toBe(3);
+    expect(await database.selectFrom("jobs").select(["status", "progress_total", "progress_completed"])
+      .where("id", "=", planned.jobId).executeTakeFirstOrThrow()).toEqual({ status: "SUCCEEDED", progress_total: 2, progress_completed: 2 });
+    expect((await database.selectFrom("certificates").select("status").where("id", "in", planned.items.map((item) => item.certificate_id)).execute())
+      .map((certificate) => certificate.status)).toEqual(["AVAILABLE", "AVAILABLE"]);
+
+    await generationProcessor.process({ version: 1, job_id: planned.jobId, organization_id: organizationId });
+    expect(renderCount).toBe(3);
+    expect((await database.selectFrom("certificate_generation_items").select("status").where("job_id", "=", planned.jobId).execute())
+      .map((item) => item.status)).toEqual(["SUCCEEDED", "SUCCEEDED"]);
+  });
+
+  it("does not resurrect a revoked certificate on delayed duplicate execution", async () => {
+    const planned = await plan("Revoked Recipient");
+    const storage = new MemoryStorage();
+    await processor(storage, { render: async () => minimalPdf }).process({ version: 1, job_id: planned.jobId, organization_id: organizationId });
+    const published = await database.selectFrom("certificates").selectAll().where("id", "=", planned.certificate_id).executeTakeFirstOrThrow();
+    await database.updateTable("certificates").set({
+      status: "REVOKED",
+      revoked_at: new Date("2026-08-25T09:00:00.000Z"),
+      revocation_reason: "Synthetic terminal revocation"
+    }).where("id", "=", planned.certificate_id).execute();
+
+    await processor(storage, { render: async () => { throw new Error("renderer must not run"); } })
+      .process({ version: 1, job_id: planned.jobId, organization_id: organizationId });
+    expect(await database.selectFrom("certificates").select([
+      "status", "generation_revision", "pdf_storage_key", "pdf_content_sha256", "pdf_size_bytes", "pdf_mime_type", "issued_at"
+    ]).where("id", "=", planned.certificate_id).executeTakeFirstOrThrow()).toEqual({
+      status: "REVOKED",
+      generation_revision: published.generation_revision,
+      pdf_storage_key: published.pdf_storage_key,
+      pdf_content_sha256: published.pdf_content_sha256,
+      pdf_size_bytes: published.pdf_size_bytes,
+      pdf_mime_type: published.pdf_mime_type,
+      issued_at: published.issued_at
+    });
   });
 });
