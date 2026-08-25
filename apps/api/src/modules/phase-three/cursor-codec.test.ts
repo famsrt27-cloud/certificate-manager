@@ -19,7 +19,12 @@ describe("opaque admin cursor", () => {
     const codec = new CursorCodec("cursor-secret-at-least-32-bytes-value");
     const cursor = codec.encode({ organizationId, resource: "projects", createdAt: new Date(),
       id: "00000000-0000-4000-8000-000000000002" });
-    expect(() => codec.decode(`${cursor.slice(0, -1)}A`, organizationId, "projects")).toThrow();
+    const tamperedBytes = Buffer.from(cursor, "base64url");
+    const lastByteIndex = tamperedBytes.length - 1;
+    tamperedBytes[lastByteIndex] = tamperedBytes[lastByteIndex]! ^ 0x01;
+    const tamperedCursor = tamperedBytes.toString("base64url");
+    expect(tamperedCursor).not.toBe(cursor);
+    expect(() => codec.decode(tamperedCursor, organizationId, "projects")).toThrow();
     expect(() => codec.decode(cursor, organizationId, "trainings")).toThrow();
   });
 });
