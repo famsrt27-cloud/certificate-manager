@@ -29,13 +29,15 @@ describe("certificate renderer dependency boundary", () => {
     for (const pattern of forbidden) expect(source).not.toMatch(pattern);
   });
 
-  it("declares only the reviewed pre-Phase-5 runtime dependencies", () => {
+  it("declares only the reviewed Phase-5 runtime dependencies", () => {
     const packageJson = JSON.parse(readFileSync(join(rendererRoot, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
     };
 
     expect(Object.keys(packageJson.dependencies ?? {}).sort()).toEqual([
       "@certificate-platform/template-engine",
+      "pdfkit",
+      "qrcode",
       "zod"
     ]);
   });

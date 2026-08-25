@@ -13,7 +13,9 @@ const infrastructure = {
   OBJECT_STORAGE_ENDPOINT: "http://127.0.0.1:9000",
   OBJECT_STORAGE_BUCKET: "certificate-test-private",
   OBJECT_STORAGE_ACCESS_KEY: "synthetic-access-key",
-  OBJECT_STORAGE_SECRET_KEY: "synthetic-storage-secret"
+  OBJECT_STORAGE_SECRET_KEY: "synthetic-storage-secret",
+  VERIFICATION_PUBLIC_BASE_URL: "https://verify.example.invalid",
+  VERIFICATION_SIGNING_KEYS_JSON: JSON.stringify({ "test-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" })
 };
 
 describe("environment validation", () => {
@@ -33,7 +35,10 @@ describe("environment validation", () => {
   });
 
   it("applies worker and public web defaults", () => {
-    expect(loadWorkerEnvironment(infrastructure).WORKER_HEALTH_PORT).toBe(3_002);
+    const worker = loadWorkerEnvironment(infrastructure);
+    expect(worker.WORKER_HEALTH_PORT).toBe(3_002);
+    expect(worker.CERTIFICATE_GENERATION_CONCURRENCY).toBe(2);
+    expect(worker.VERIFICATION_SIGNING_KEYS_JSON["test-key"]).toHaveLength(32);
     expect(loadWebPublicEnvironment({}).NEXT_PUBLIC_API_BASE_PATH).toBe("/api");
   });
 

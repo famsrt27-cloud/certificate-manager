@@ -133,6 +133,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@certificate-platform/certificate-renderer':
+        specifier: workspace:*
+        version: link:../../packages/certificate-renderer
       '@certificate-platform/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -151,6 +154,9 @@ importers:
       '@certificate-platform/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@certificate-platform/template-engine':
+        specifier: workspace:*
+        version: link:../../packages/template-engine
       csv-parse:
         specifier: 7.0.2
         version: 7.0.2

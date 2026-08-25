@@ -12,6 +12,7 @@ import {
   connectRedis,
   createBullMqRedisConnection,
   createCertificateGenerationProducer,
+  createCertificateGenerationWorker,
   createParticipantImportProducer,
   createParticipantImportWorker,
   type ParticipantImportJobPayload,
@@ -249,6 +250,34 @@ describe.skipIf(!integrationEnabled)("queue outbox real BullMQ integration", () 
       const keys = await redis.keys(`${prefix}:*`);
       if (keys.length > 0) await redis.del(...keys);
       await closeRedis(redis);
+    }
+  }, 15_000);
+
+  it("delivers the minimal certificate generation payload through the real consumer", async () => {
+    const jobId = randomUUID();
+    const prefix = `certificate-platform-generation-consumer-${randomUUID()}`;
+    const producerRedis = createBullMqRedisConnection({ url: redisUrl!, connectionName: `generation-consumer-producer-${jobId}` });
+    const workerRedis = createBullMqRedisConnection({ url: redisUrl!, connectionName: `generation-consumer-worker-${jobId}` });
+    await Promise.all([connectRedis(producerRedis), connectRedis(workerRedis)]);
+    const producer = createCertificateGenerationProducer(producerRedis, prefix);
+    let resolveDelivery!: (payload: { version: 1; job_id: string; organization_id: string }) => void;
+    let rejectDelivery!: (error: Error) => void;
+    const delivered = new Promise<{ version: 1; job_id: string; organization_id: string }>((resolve, reject) => {
+      resolveDelivery = resolve;
+      rejectDelivery = reject;
+    });
+    const timeout = setTimeout(() => rejectDelivery(new Error("delivery timed out")), 10_000);
+    const worker = createCertificateGenerationWorker({ connection: workerRedis, prefix, concurrency: 1,
+      process: async (payload) => resolveDelivery(payload), onFinalFailure: async () => undefined });
+    try {
+      await producer.enqueue({ version: 1, job_id: jobId, organization_id: organizationId });
+      expect(await delivered).toEqual({ version: 1, job_id: jobId, organization_id: organizationId });
+    } finally {
+      clearTimeout(timeout);
+      await Promise.allSettled([worker.close(), producer.close()]);
+      const keys = await producerRedis.keys(`${prefix}:*`);
+      if (keys.length > 0) await producerRedis.del(...keys);
+      await Promise.allSettled([closeRedis(producerRedis), closeRedis(workerRedis)]);
     }
   }, 15_000);
 });

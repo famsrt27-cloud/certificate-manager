@@ -6,6 +6,7 @@ import {
   connectRedis,
   createBullMqRedisConnection,
   createCertificateGenerationProducer,
+  createCertificateGenerationWorker,
   createParticipantImportProducer,
   createParticipantImportWorker,
   createRedisConnection
@@ -15,6 +16,7 @@ import { createPrivateObjectStorage, createS3Client, ensurePrivateBucket } from 
 import { buildWorkerHealthApp } from "./health-app.js";
 import { ParticipantImportSourceCleanupReconciler } from "./participant-import-source-cleanup-reconciler.js";
 import { ParticipantImportProcessor } from "./processors/participant-import-processor.js";
+import { CertificateGenerationProcessor } from "./processors/certificate-generation-processor.js";
 import { QueueOutboxDispatcher } from "./queue-outbox-dispatcher.js";
 import { StorageCleanupReconciler } from "./storage-cleanup-reconciler.js";
 
@@ -31,12 +33,16 @@ const queueRedis = createBullMqRedisConnection({
   url: environment.REDIS_URL,
   connectionName: "certificate-platform-worker-participant-import"
 });
+const certificateQueueRedis = createBullMqRedisConnection({
+  url: environment.REDIS_URL,
+  connectionName: "certificate-platform-worker-certificate-generation"
+});
 const dispatcherRedis = createBullMqRedisConnection({
   url: environment.REDIS_URL,
   connectionName: "certificate-platform-worker-outbox-dispatcher"
 });
 
-await Promise.all([connectRedis(redis), connectRedis(queueRedis), connectRedis(dispatcherRedis)]);
+await Promise.all([connectRedis(redis), connectRedis(queueRedis), connectRedis(certificateQueueRedis), connectRedis(dispatcherRedis)]);
 const s3 = createS3Client({
   endpoint: environment.OBJECT_STORAGE_ENDPOINT,
   region: environment.OBJECT_STORAGE_REGION,
@@ -60,6 +66,21 @@ const participantImportWorker = createParticipantImportWorker({
   concurrency: environment.PARTICIPANT_IMPORT_CONCURRENCY,
   process: (payload) => participantImportProcessor.process(payload),
   onFinalFailure: (payload) => participantImportProcessor.handleFinalFailure(payload)
+});
+const certificateGenerationProcessor = new CertificateGenerationProcessor({
+  database,
+  storage,
+  verificationBaseUrl: environment.VERIFICATION_PUBLIC_BASE_URL,
+  verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
+  maximumAssetBytes: environment.CERTIFICATE_RENDER_MAX_ASSET_BYTES,
+  maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
+});
+const certificateGenerationWorker = createCertificateGenerationWorker({
+  connection: certificateQueueRedis,
+  prefix: environment.BULLMQ_PREFIX,
+  concurrency: environment.CERTIFICATE_GENERATION_CONCURRENCY,
+  process: (payload) => certificateGenerationProcessor.process(payload),
+  onFinalFailure: (payload) => certificateGenerationProcessor.handleFinalFailure(payload)
 });
 const participantImports = createParticipantImportProducer(dispatcherRedis, environment.BULLMQ_PREFIX);
 const certificateGenerations = createCertificateGenerationProducer(dispatcherRedis, environment.BULLMQ_PREFIX);
@@ -181,12 +202,18 @@ const shutdown = async (signal: string): Promise<void> => {
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
   if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
-  await Promise.allSettled([participantImportWorker.close(), participantImports.close(), certificateGenerations.close()]);
+  await Promise.allSettled([
+    participantImportWorker.close(),
+    certificateGenerationWorker.close(),
+    participantImports.close(),
+    certificateGenerations.close()
+  ]);
   s3.destroy();
   await Promise.allSettled([
     closeDatabase(database),
     closeRedis(redis),
     closeRedis(queueRedis),
+    closeRedis(certificateQueueRedis),
     closeRedis(dispatcherRedis)
   ]);
 };
@@ -204,12 +231,18 @@ try {
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
   if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
-  await Promise.allSettled([participantImportWorker.close(), participantImports.close(), certificateGenerations.close()]);
+  await Promise.allSettled([
+    participantImportWorker.close(),
+    certificateGenerationWorker.close(),
+    participantImports.close(),
+    certificateGenerations.close()
+  ]);
   s3.destroy();
   await Promise.allSettled([
     closeDatabase(database),
     closeRedis(redis),
     closeRedis(queueRedis),
+    closeRedis(certificateQueueRedis),
     closeRedis(dispatcherRedis)
   ]);
   process.exitCode = 1;
