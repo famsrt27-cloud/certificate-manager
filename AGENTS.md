@@ -37,6 +37,8 @@ Certificate Management & Public Verification Platform.
 - Do not log passwords, tokens, session secrets, or unnecessary PII.
 - Validate and sanitize uploaded assets.
 - Treat PDF/HTML rendering as an untrusted execution boundary.
+- The certificate renderer receives only strict validated render data and validated asset bytes; it must not import database, storage, queue, auth, network, filesystem or signing-key capabilities.
+- The renderer never signs verification tokens. A trusted application/worker boundary prepares the final verification URL and passes only that string to rendering.
 - Public certificate pages should be non-indexable.
 
 ## Testing

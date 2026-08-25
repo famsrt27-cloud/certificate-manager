@@ -1,8 +1,8 @@
 {
   "project": "Certificate Management & Public Verification Platform",
   "version": "3.0",
-  "artifact_type": "specification",
-  "status": "phase-3-project-training-participant-implemented-non-production",
+  "artifact_type": "implementation-and-specification",
+  "status": "phase-4-5-stabilization-implemented-awaiting-final-ci",
   "canonical_start_file": "CODEX-START-HERE.md",
   "canonical_api_contract": "docs/10-api-contract.md",
   "token_strategy": "stateless-signed-token-plus-stateful-certificate-status",
@@ -13,7 +13,11 @@
     "runtime": "Node.js 24.12.0",
     "pnpm": "11.5.2",
     "typescript": "6.0.3",
-    "applications": ["apps/web", "apps/api", "apps/worker"],
+    "applications": [
+      "apps/web",
+      "apps/api",
+      "apps/worker"
+    ],
     "foundation_packages": [
       "packages/config",
       "packages/contracts",
@@ -27,32 +31,83 @@
   },
   "phase_2": {
     "implemented_on": "2026-08-18",
-    "packages": ["packages/auth", "packages/domain"],
-    "features": ["bcrypt", "Redis sessions", "CSRF", "RBAC", "tenant scoping", "audit foundation"],
+    "packages": [
+      "packages/auth",
+      "packages/domain"
+    ],
+    "features": [
+      "bcrypt",
+      "Redis sessions",
+      "CSRF",
+      "RBAC",
+      "tenant scoping",
+      "audit foundation"
+    ],
     "production_mfa_gate": true,
     "phase_3_started": true,
     "next_phase_authorized": true
   },
   "phase_3": {
     "implemented_on": "2026-08-18",
-    "packages": ["packages/storage", "packages/contracts", "packages/database", "packages/domain", "packages/queue"],
-    "features": ["project CRUD", "training CRUD", "participant management", "private CSV/XLSX import", "validation preview", "BullMQ confirmation worker"],
-    "phase_4_started": false,
-    "next_phase_authorized": false
+    "packages": [
+      "packages/storage",
+      "packages/contracts",
+      "packages/database",
+      "packages/domain",
+      "packages/queue"
+    ],
+    "features": [
+      "project CRUD",
+      "training CRUD",
+      "participant management",
+      "private CSV/XLSX import",
+      "validation preview",
+      "BullMQ confirmation worker"
+    ],
+    "phase_4_started": true,
+    "next_phase_authorized": true
   },
   "implementation_stack": {
-    "frontend": ["Next.js", "Tailwind CSS"],
-    "backend": ["Fastify", "TypeScript"],
+    "frontend": [
+      "Next.js",
+      "Tailwind CSS"
+    ],
+    "backend": [
+      "Fastify",
+      "TypeScript"
+    ],
     "database": "PostgreSQL 16",
     "query_builder": "Kysely",
     "migrations": "node-pg-migrate",
-    "auth": ["bcrypt", "Redis server-side session", "CSRF"],
-    "pdf": ["PDFKit", "qrcode"],
-    "template": ["Custom JSON", "Zod validator", "allowlisted data binder"],
-    "queue_worker": ["BullMQ", "Redis"],
-    "object_storage": ["S3-compatible", "MinIO", "@aws-sdk/client-s3"],
+    "auth": [
+      "bcrypt",
+      "Redis server-side session",
+      "CSRF"
+    ],
+    "pdf": [
+      "PDFKit",
+      "qrcode"
+    ],
+    "template": [
+      "Custom JSON",
+      "Zod validator",
+      "allowlisted data binder"
+    ],
+    "queue_worker": [
+      "BullMQ",
+      "Redis"
+    ],
+    "object_storage": [
+      "S3-compatible",
+      "MinIO",
+      "@aws-sdk/client-s3"
+    ],
     "validation": "Zod",
-    "testing": ["Vitest", "Supertest", "Playwright"],
+    "testing": [
+      "Vitest",
+      "Supertest",
+      "Playwright"
+    ],
     "deployment": "Docker Compose"
   },
   "generated_files": [
@@ -87,5 +142,45 @@
     "docs/24-adr.md",
     "docs/25-ai-prompts.md",
     "docs/26-definition-of-done.md"
-  ]
+  ],
+  "phase_4": {
+    "implemented_on": "2026-08-18",
+    "packages": [
+      "packages/template-engine",
+      "packages/storage",
+      "packages/contracts",
+      "packages/database"
+    ],
+    "features": [
+      "template CRUD",
+      "validated private image/font assets",
+      "versioned custom JSON templates",
+      "preview/data binding",
+      "immutable publish"
+    ],
+    "stabilization_required": true
+  },
+  "phase_4_5": {
+    "implemented_on": "2026-08-25",
+    "branch": "fix/phase-4-5-stabilization",
+    "features": [
+      "session revocation integrity",
+      "participant import idempotency and cleanup durability",
+      "PostgreSQL queue outbox and reconciliation",
+      "transactional audit integrity",
+      "template/storage consistency",
+      "Docker workspace build reliability",
+      "immutable certificate issuance and lifecycle integrity",
+      "exact certificate generation planning contract",
+      "capability-minimized certificate renderer boundary"
+    ],
+    "packages": [
+      "packages/certificate-renderer"
+    ],
+    "final_required_checks": [
+      "Quality Gate",
+      "Integration Gate"
+    ],
+    "phase_5_authorized_after_green_ci": true
+  }
 }

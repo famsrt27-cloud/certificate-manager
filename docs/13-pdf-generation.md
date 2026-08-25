@@ -40,6 +40,24 @@ Import
 → Upload private storage
 → Mark certificate AVAILABLE
 
+## Renderer input boundary
+
+`packages/certificate-renderer` is created before the PDF implementation so Phase 5 starts from a capability-minimized contract rather than passing service objects into PDF code.
+
+The version-1 render input contains only:
+
+- `inputVersion` and immutable `rendererRevision`
+- normalized format-version-1 template definition
+- binding context sourced from the immutable issuance snapshot/certificate number
+- a final absolute verification URL with no query parameters
+- exactly referenced validated image/font assets with asset ID, purpose, canonical MIME, SHA-256 and bytes
+
+The worker owns PostgreSQL, Redis/BullMQ, object storage and future token-signing access. It loads/checks data before the handoff. The renderer owns none of those capabilities and never receives storage keys, database IDs as lookup capability, signing keys or a token signer.
+
+The boundary rechecks asset requirements and SHA-256, rejects extra/missing assets and copies caller-owned bytes. Phase 5 must provide an explicit total asset-byte budget per render. Same-process TypeScript is a package/capability boundary, not a true sandbox; worker resource/process isolation remains required for production hardening.
+
+The renderer never creates a verification token. It renders only the final `verificationUrl` prepared by trusted application code.
+
 ## Worker rules
 
 - idempotent jobs

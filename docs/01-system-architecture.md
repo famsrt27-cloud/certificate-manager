@@ -69,9 +69,13 @@ Applications depend on shared packages; shared packages never import application
 - Import and certificate generation run as bounded, retryable background jobs.
 - BullMQ/Redis coordinates delivery while PostgreSQL job/item rows remain durable state and idempotency authority.
 - Workers are idempotent and use explicit job/item state.
+- The worker is the trusted infrastructure adapter: it may read PostgreSQL, private storage and the future verification-token service, then constructs one strict `CertificateRenderInput`.
+- `packages/certificate-renderer` receives only the normalized template definition, immutable binding values, server-selected renderer revision, the final verification URL string and exactly the validated asset bytes referenced by that template.
+- The renderer receives no database/Redis/S3 client, storage key, internal certificate UUID, signing key, token-signing API, arbitrary path or remote URL loader.
+- Render-input parsing revalidates the strict template shape, required asset set, asset purpose/MIME, SHA-256 identity, URL transport rules and an explicit total asset-byte budget. Asset bytes are copied at the boundary to remove caller aliases.
 - Custom JSON template definitions are validated with Zod and resolved by an allowlisted data binder; they are not executable code.
-- PDFKit/qrcode rendering runs with no remote-resource loading and with CPU, memory, time and temporary-filesystem limits.
-- Only validated, private, internally addressed assets may be loaded.
+- Phase 5 PDFKit/qrcode execution must remain behind this package boundary. Same-process execution is not described as a security sandbox; CPU/memory/time/process isolation is a separate worker execution control.
+- Only validated private assets loaded by the worker may cross the renderer boundary; the renderer itself performs no remote-resource loading.
 
 ### Storage boundary
 

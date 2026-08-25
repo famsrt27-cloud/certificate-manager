@@ -266,3 +266,33 @@ Consequences:
 - A retry of an existing `ALL_ELIGIBLE` job returns the original job without re-resolving current participants.
 - Workers may not infer job membership from live training relationships.
 - Reissue requires a later explicit API contract and must create a fresh certificate number/public identifier while retaining revoked history.
+
+## ADR-018: Capability-Minimized Certificate Renderer Boundary
+
+Status: Accepted
+
+Decision:
+
+Create `packages/certificate-renderer` before Phase 5 PDF implementation. Its public boundary accepts only a strict versioned render input: normalized template data, immutable issuance binding values, renderer revision, a prepared verification URL and exactly referenced validated asset bytes with SHA-256 identity.
+
+The renderer package:
+
+- depends on the template engine/Zod validation boundary only
+- does not import database, storage, queue, auth or network infrastructure
+- never receives storage keys, signing keys or a token-signing service
+- revalidates exact asset membership/purpose/MIME/hash and an explicit aggregate byte budget
+- copies caller-owned asset bytes at the boundary
+- treats the verification URL as already-authorized data and never signs tokens itself
+
+The worker remains the trusted infrastructure adapter. It loads durable PostgreSQL state/private objects and later calls the verification-token service before invoking the renderer.
+
+Reason:
+
+PDF/template processing is an untrusted resource boundary. Passing rich worker/service objects into renderer code would unnecessarily grant database, S3, queue, filesystem or signing capabilities and make later isolation materially harder. A narrow serializable input also creates a deterministic seam for tests and future worker-thread/child-process isolation.
+
+Consequences:
+
+- Phase 5 PDFKit/qrcode implementation goes behind this package API rather than inside API/worker service code.
+- Same-process package separation is not called a sandbox; production resource/process isolation remains a separate hardening requirement.
+- Security tests fail if forbidden infrastructure dependencies are introduced into renderer source/package metadata.
+- Phase 6 token code must keep verification-token time/key selection stable for existing certificates; renderer regeneration consumes the resulting prepared URL only.

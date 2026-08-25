@@ -28,8 +28,15 @@ Builder, validated assets, versions, preview and immutable publish.
 
 Status: Implemented on 2026-08-18 for template management only. This phase intentionally excludes PDF generation, certificate issuance and all Phase 5 work. PostgreSQL integration execution remains environment-gated on a provisioned `TEST_DATABASE_URL`.
 
+## Phase 4.5 — Stabilization and Phase 5 Entry Integrity
+Session/import/queue/audit/template/storage cleanup stabilization plus certificate integrity, exact generation planning and capability-minimized renderer contracts.
+
+Status: Implemented on the stabilization branch. Entry to Phase 5 still requires the stabilization PR's full Quality Gate and Integration Gate to be green before merge/continuation.
+
 ## Phase 5 — Certificate Generation
 Generation queue, workers, PDF, storage, QR.
+
+Entry contract: read migrations 006/007 and ADR-016 through ADR-018 first. Phase 5 must materialize exact generation targets transactionally, render from immutable issuance snapshots/planned issue time, retain renderer revision, use durable queue/storage reconciliation, and call the strict `packages/certificate-renderer` boundary rather than giving rendering infrastructure capabilities.
 
 ## Phase 6 — Public Verification
 Verification, stateless token, rate limiting, secure download.

@@ -177,6 +177,15 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
 
+  packages/certificate-renderer:
+    dependencies:
+      '@certificate-platform/template-engine':
+        specifier: workspace:*
+        version: link:../template-engine
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+
   packages/config:
     dependencies:
       zod:

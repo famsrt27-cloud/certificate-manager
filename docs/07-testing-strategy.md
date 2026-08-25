@@ -23,6 +23,7 @@ Use Vitest for pure policies and deterministic components:
 - job idempotency decisions
 - certificate lifecycle transitions
 - deterministic PDF rendering inputs
+- strict renderer-boundary validation, asset-set/hash checks and forbidden capability/dependency drift
 
 Unit tests may use small fakes at explicit infrastructure ports. They must not mock away the security policy under test.
 
@@ -69,6 +70,7 @@ Required suites include:
 - malicious CSV/XLSX and template asset uploads
 - template binder injection and forbidden binding paths
 - PDF resource exhaustion and remote-resource attempts
+- renderer secret/infrastructure-field rejection and dependency-capability boundary tests
 - storage-key and permanent-URL disclosure checks
 - secret/PII leakage in logs and error responses
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-The Phase 4 implementation adds the approved browser-safe `template-engine` package. Certificate rendering and shared test-fixture packages remain deferred to their roadmap phases.
+Phase 4 added the approved browser-safe `template-engine` package. Phase 4.5 Group 8 adds the `certificate-renderer` contract package before Phase 5 implementation; it currently owns only the strict render-input boundary and renderer revision, while PDFKit/qrcode execution remains Phase 5 work. Shared test-fixture packages remain deferred.
 
 ## Package manager and workspace
 
@@ -78,6 +78,8 @@ apps/worker ────────────→ packages/domain
 Shared packages never import from `apps/*`. `packages/contracts` must remain browser-safe and cannot import database, Redis, bcrypt, queue, storage or signing-key code. Circular workspace dependencies are forbidden.
 
 Phase 4 adds `apps/api -> packages/template-engine` for canonical definition validation and binding, and `packages/contracts -> packages/template-engine` so the same browser-safe Zod definition is used at the wire and UI boundaries. The template engine has no infrastructure or application dependency.
+
+The Group 8 renderer boundary depends only on `packages/template-engine` plus Zod. It has no database, storage, queue, auth or network dependency. Phase 5 may add PDFKit/qrcode inside this package without granting it infrastructure capabilities; the worker remains responsible for loading durable state/assets and preparing the final verification URL before invoking rendering.
 
 ## TypeScript conventions
 

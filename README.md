@@ -128,33 +128,29 @@ Certificate Manager เป็นระบบบริหารจัดการ
 - race-safe asset validation/locking
 - transactional mutations + audit
 
-### Phase 4.5 — Stabilization
+### Phase 4.5 — Stabilization and Phase 5 Entry Integrity
 
-Completed work up to the current checkpoint includes:
+The stabilization branch now contains:
 
 - Group 1 — session revocation/rotation integrity
 - Group 2 — participant import idempotency
-- Group 3 — queue durability/reconciliation
+- Group 3 — durable queue outbox/reconciliation
 - Group 4 — transactional mutation + audit integrity
 - Group 5A — template relational consistency / ghost draft / publish-archive race
 - Group 5B — durable object-storage cleanup reconciliation
+- Group 6 — durable participant-import source cleanup
+- Group 7 — clean Docker/workspace build reliability and Docker CI build gate
+- Group 8A — immutable certificate issuance snapshot, lifecycle/revision/stale-writer integrity
+- Group 8B — exact generation target/idempotency contract, planned issue time, renderer revision and duplicate/reissue boundary
+- Group 8C — strict capability-minimized certificate-renderer input package and final Phase 5 entry documentation
 
-At the Group 5B checkpoint the verified runtime test results were:
-
-```text
-Phase 4 integration       8 / 8 passed
-Storage cleanup           2 / 2 passed
-Security suite           57 / 57 passed
-Full integration         27 / 27 passed across 9 files
-```
-
-Test counts are a historical checkpoint and may increase as development continues.
+Exact test counts evolve as the suite grows. Treat the current local command output and GitHub `Quality Gate` + `Integration Gate` as authoritative verification rather than copying old counts from this README.
 
 ## Not implemented / not production ready
 
 - Phase 5 certificate generation
 - real PDF issuance workflow
-- final PDF rendering isolation
+- PDFKit/qrcode rendering implementation behind the already-created strict renderer boundary
 - public verification API/UI
 - public certificate download
 - final signed verification-token flow in code
@@ -337,7 +333,8 @@ certificate-manager/
 │  ├─ domain/              authorization/domain policies
 │  ├─ queue/               BullMQ/Redis queue integration
 │  ├─ storage/             private S3-compatible storage
-│  └─ template-engine/     template schema + binder
+│  ├─ template-engine/     template schema + binder
+│  └─ certificate-renderer/ strict render-input boundary; PDFKit/qrcode implementation starts Phase 5
 │
 ├─ tests/
 │  └─ security/            cross-cutting security tests
@@ -398,132 +395,52 @@ Integration Gate
 
 ## Resume point
 
-หลัง Group 5B งานถัดไปคือ:
+Phase 4.5 implementation is complete on this stabilization branch. **Do not merge/start Phase 5 until the current PR commit has both required GitHub checks green.**
+
+After the final stabilization CI is green and PR #1 is merged, the next implementation phase is:
 
 ```text
-Group 6 — Participant Import Cleanup Reliability
+Phase 5 — Certificate Generation
 ```
 
-ยัง **ไม่เริ่ม Phase 5**
+Before Phase 5 coding, read ADR-016 through ADR-018, migrations 006/007, `docs/10-api-contract.md`, `docs/13-pdf-generation.md` and `packages/certificate-renderer`.
 
 ---
 
 # 8. ย้ายเครื่อง: Checklist ก่อนออกจากเครื่องเก่า
 
-ส่วนนี้สำคัญที่สุดถ้ากำลังเปลี่ยนคอมพิวเตอร์
+Source code, migrations and documentation travel through Git. Docker Desktop PostgreSQL/Redis/MinIO volumes do not automatically travel with an external HDD or Git clone.
 
-## 8.1 ตรวจว่า Group 5B อยู่ใน Git จริง
-
-หลัง Group 5B ควรมีไฟล์อย่างน้อย:
-
-```text
-packages/database/migrations/202608210004_storage-cleanup-outbox.ts
-packages/database/src/storage-cleanup-repository.ts
-apps/worker/src/storage-cleanup-reconciler.ts
-apps/worker/tests/integration/storage-cleanup.integration.test.ts
-```
-
-ตรวจ:
-
-```powershell
-Test-Path packages/database/migrations/202608210004_storage-cleanup-outbox.ts
-Test-Path packages/database/src/storage-cleanup-repository.ts
-Test-Path apps/worker/src/storage-cleanup-reconciler.ts
-```
-
-ควรได้:
-
-```text
-True
-True
-True
-```
-
-## 8.2 ตรวจ working tree
-
-```powershell
-git status --short
-git diff --stat
-```
-
-อย่าออกจากเครื่องเก่าจนรู้ว่ามีไฟล์อะไรยังไม่ได้ commit
-
-## 8.3 Final local gates ก่อน checkpoint
-
-Group 5B runtime tests ผ่านแล้ว แต่ก่อน commit/push ควรรัน static/build gate ด้วย:
-
-```powershell
-pnpm build
-pnpm typecheck
-pnpm test:security
-pnpm test:integration
-git diff --check
-```
-
-Expected checkpoint:
-
-```text
-Security:    57/57
-Integration: 27/27
-```
-
-## 8.4 Commit Group 5B
-
-ถ้ายังไม่ได้ commit ให้ stage เฉพาะ Group 5B:
-
-```powershell
-git add packages/database/migrations/202608210004_storage-cleanup-outbox.ts
-git add packages/database/src/storage-cleanup-repository.ts
-git add packages/database/src/types.ts
-git add packages/database/src/index.ts
-git add apps/api/src/modules/phase-four/phase-four-service.ts
-git add apps/api/tests/integration/phase-four.integration.test.ts
-git add apps/worker/src/storage-cleanup-reconciler.ts
-git add apps/worker/src/server.ts
-git add apps/worker/tests/integration/storage-cleanup.integration.test.ts
-
-git diff --cached --check
-git diff --cached --stat
-
-git commit -m "fix(storage): add durable object cleanup reconciliation"
-```
-
-## 8.5 Commit README
-
-หลังวาง README ฉบับนี้ไว้ที่ root:
-
-```powershell
-git add README.md
-git diff --cached --check
-git commit -m "docs: expand setup and project handoff guide"
-```
-
-## 8.6 Push ก่อนย้ายเครื่อง
-
-```powershell
-git push
-```
-
-จากนั้น:
+ก่อนย้ายเครื่อง:
 
 ```powershell
 git status
 git log --oneline -8
+pnpm build
+pnpm typecheck
+pnpm test:security
+pnpm test:integration
 ```
 
-ควรเห็น:
+ถ้ามี change ที่ตั้งใจเก็บ ให้ review/commit/push ก่อนย้าย และรอ GitHub `Quality Gate` + `Integration Gate` ให้ผ่าน
 
-```text
-nothing to commit, working tree clean
+บนเครื่องใหม่:
+
+```powershell
+git fetch --all --prune
+git switch fix/phase-4-5-stabilization
+git pull --ff-only
+
+corepack enable
+corepack prepare pnpm@11.5.2 --activate
+pnpm install --frozen-lockfile
+
+Copy-Item .env.example .env
+docker compose up -d postgres redis minio
+pnpm db:migrate
 ```
 
-และตรวจ GitHub Actions ให้ `Quality Gate` + `Integration Gate` ผ่าน
-
-### สำคัญ
-
-**Git commit อย่างเดียวไม่พอสำหรับการย้ายเครื่อง**
-
-ถ้า commit อยู่เฉพาะเครื่องเก่าแต่ยังไม่ได้ `git push` เครื่องใหม่จะ clone ไม่เห็น commit นั้น
+ถ้าไม่ต้องการ local development data เดิม ให้สร้าง DB/MinIO ใหม่จาก migrations/config ได้เลย. ถ้าต้องย้ายข้อมูล PostgreSQL ที่สำคัญ ให้ใช้ `pg_dump`/restore; object storage ต้อง backup/export แยกต่างหาก. อย่าใช้ `docker compose down -v` กับข้อมูลที่ต้องเก็บ.
 
 ---
 
@@ -901,6 +818,9 @@ Checkpoint หลัง Group 5B:
 202608180002_seed-rbac.ts
 202608210003_queue-outbox.ts
 202608210004_storage-cleanup-outbox.ts
+202608240005_participant-import-source-cleanup.ts
+202608240006_certificate-integrity-foundation.ts
+202608240007_certificate-generation-contract.ts
 ```
 
 ## 12.2 Apply migrations to development DB
@@ -1041,12 +961,7 @@ git diff --check
 pnpm test:security
 ```
 
-Checkpoint:
-
-```text
-17 test files
-57 tests passed
-```
+The suite count changes as integrity/renderer tests are added. Use the current command result as the source of truth.
 
 ครอบคลุม:
 
@@ -1072,12 +987,7 @@ vitest run --no-file-parallelism apps/api/tests/integration apps/worker/tests/in
 
 เรา intentionally ปิด test-file parallelism เพราะ integration files แชร์ external infrastructure และ dispatcher/outbox มีสิทธิ์ consume shared database rows ข้าม test file ถ้ารันพร้อมกัน
 
-Checkpoint หลัง Group 5B:
-
-```text
-Test Files  9 passed (9)
-Tests       27 passed (27)
-```
+Do not hard-code an old integration count here. A valid run must execute all files under `apps/api/tests/integration` and `apps/worker/tests/integration` without environment-based skips, and all must pass.
 
 ## 15.5 Create test PostgreSQL database
 
@@ -1577,13 +1487,9 @@ Phase 2 intentionally blocks approved production startup until MFA contract/impl
 
 ห้ามเริ่ม certificate generation จน Phase 4.5 integrity work ผ่าน final gate
 
-## Current remaining Phase 4.5 groups
+## Current Phase 4.5 gate
 
-```text
-Group 6 — Import cleanup reliability
-Group 7 — Docker/workspace build fixes
-Group 8 — Pre-Phase 5 integrity contracts + final verification
-```
+Groups 1–8 are implemented on the stabilization branch. Phase 5 remains blocked until the final stabilization commit passes both required GitHub checks and the Draft PR is ready to merge.
 
 ---
 
@@ -1943,52 +1849,39 @@ PR #1 ต้องอยู่ Draft จน:
 
 # 27. Next Work
 
-## NEXT: Group 6 — Participant Import Cleanup Reliability
+## NEXT: Phase 5 — Certificate Generation
 
-Known issues to investigate/fix:
+Start only after the final Phase 4.5 commit is green in both GitHub required checks and the stabilization PR has been merged/approved for continuation.
 
-1. cleanup failure ไม่ควรเปลี่ยน successful business processing ให้กลายเป็น unrelated `DEAD_LETTER`
-2. terminal jobs ไม่ควรพยายาม cleanup ซ้ำ forever โดยไม่มี cleanup state
-3. cleanup outcome ควรมี durable metadata/retry semantics
-4. storage/database cleanup order ต้องไม่สร้าง orphan หรือ destroy required evidence
-5. เพิ่ม integration tests สำหรับ delete failure + later recovery
-
-## Then: Group 7 — Docker / Workspace Build
-
-Known work:
-
-- inspect Dockerfile workspace manifest copies
-- `packages/template-engine/package.json` ต้องถูกพิจารณาใน clean Docker install
-- verify filtered builds from clean checkout
-- add Docker build verification
-- avoid relying on stale `dist` generated locally
-
-ณ checkpoint นี้ full application Docker build ยังไม่ควรถูกถือว่าเป็น production-proven path
-
-## Then: Group 8 — Pre-Phase 5 Integrity Contracts
-
-ก่อน Phase 5:
-
-- immutable certificate issuance/render snapshot design
-- certificate lifecycle transition guards
-- renderer isolation / untrusted input boundary
-- final queue/storage integrity verification
-- final CI gate
-
-## Phase 5 after Group 8 only
-
-Phase 5:
+Before coding, read:
 
 ```text
-Certificate Generation
-PDF
-QR
-generation queue
-object storage
-certificate lifecycle
+AGENTS.md
+CODEX-START-HERE.md
+docs/05-database-design.md
+docs/08-erd.md
+docs/10-api-contract.md
+docs/11-token-spec.md
+docs/12-template-engine.md
+docs/13-pdf-generation.md
+docs/24-adr.md  (ADR-016, ADR-017, ADR-018)
+packages/database/migrations/202608240006_certificate-integrity-foundation.ts
+packages/database/migrations/202608240007_certificate-generation-contract.ts
+packages/certificate-renderer/
 ```
 
-อย่าข้าม stabilization เพื่อไป PDF generation เร็วขึ้น
+Phase 5 implementation order should preserve the locked boundaries:
+
+1. transactional generation planning/repository + request-bound idempotency
+2. durable generation queue/outbox contract
+3. worker item processor using immutable snapshot/planned issue time
+4. PDFKit/qrcode implementation inside `packages/certificate-renderer`
+5. private PDF storage using the existing durable storage-cleanup reconciliation pattern
+6. atomic initial publication/regeneration compare-and-swap
+7. admin generation/job APIs and UI progress
+8. full abuse/integration/Docker CI gates
+
+Do not move token signing, DB/S3 access or participant re-resolution into the renderer.
 
 ---
 
