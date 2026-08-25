@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@certificate-platform/auth": fromRoot("./packages/auth/src/index.ts"),
+      "@certificate-platform/certificate-renderer": fromRoot("./packages/certificate-renderer/src/index.ts"),
       "@certificate-platform/config": fromRoot("./packages/config/src/index.ts"),
       "@certificate-platform/contracts": fromRoot("./packages/contracts/src/index.ts"),
       "@certificate-platform/database": fromRoot("./packages/database/src/index.ts"),
