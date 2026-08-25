@@ -35,6 +35,9 @@ describe("environment validation", () => {
     expect(environment.OBJECT_STORAGE_CREATE_BUCKET).toBe(false);
     expect(environment.PUBLIC_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
     expect(environment.PUBLIC_VERIFICATION_RATE_LIMIT_NETWORK_MAX).toBe(30);
+    expect(environment.PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS).toBe(60);
+    expect(environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX).toBe(10);
     expect(environment.VERIFICATION_SIGNING_KEYS_JSON["test-key"]).toHaveLength(32);
   });
 
@@ -94,5 +97,16 @@ describe("environment validation", () => {
       ...infrastructure,
       VERIFICATION_SIGNING_KEYS_JSON: JSON.stringify({ "test-key": "d2Vhaw" })
     })).toThrow(EnvironmentValidationError);
+  });
+
+  it("rejects out-of-range public download settings", () => {
+    expect(() => loadApiEnvironment({ ...infrastructure, PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS: "61" }))
+      .toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({ ...infrastructure, PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS: "0" }))
+      .toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({ ...infrastructure,
+      PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS: "9" })).toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({ ...infrastructure,
+      PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX: "0" })).toThrow(EnvironmentValidationError);
   });
 });

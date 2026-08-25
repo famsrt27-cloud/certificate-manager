@@ -29,6 +29,23 @@ export const PublicVerificationResponseSchema = z.object({
   meta: RequestMetaSchema
 }).strict();
 
+export const PublicDownloadAuthorizationRequestSchema = z.object({
+  token: z.string().min(1).max(2_048)
+}).strict();
+
+export const PublicDownloadAuthorizationDataSchema = z.object({
+  download_token: z.string().min(1).max(2_048),
+  expires_in: z.number().int().min(1).max(60)
+}).strict();
+
+export const PublicDownloadAuthorizationResponseSchema = z.object({
+  data: PublicDownloadAuthorizationDataSchema,
+  meta: RequestMetaSchema
+}).strict();
+
 export type PublicVerificationData = z.infer<typeof PublicVerificationDataSchema>;
 export type PublicVerificationRequest = z.infer<typeof PublicVerificationRequestSchema>;
 export type PublicVerificationResponse = z.infer<typeof PublicVerificationResponseSchema>;
+export type PublicDownloadAuthorizationData = z.infer<typeof PublicDownloadAuthorizationDataSchema>;
+export type PublicDownloadAuthorizationRequest = z.infer<typeof PublicDownloadAuthorizationRequestSchema>;
+export type PublicDownloadAuthorizationResponse = z.infer<typeof PublicDownloadAuthorizationResponseSchema>;

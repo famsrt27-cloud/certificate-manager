@@ -12,6 +12,8 @@ import { registerAdminPhaseThreeRoutes, type AdminPhaseThreeRouteOptions } from 
 import { registerAdminPhaseFourRoutes, type AdminPhaseFourRouteOptions } from "./routes/admin-phase-four.js";
 import { registerAdminPhaseFiveRoutes, type AdminPhaseFiveRouteOptions } from "./routes/admin-phase-five.js";
 import { registerPublicVerificationRoutes, type PublicVerificationRouteOptions } from "./routes/public-verification.js";
+import { registerPublicDownloadAuthorizationRoutes,
+  type PublicDownloadAuthorizationRouteOptions } from "./routes/public-download-authorization.js";
 
 export interface BuildApiOptions {
   readonly dependencies: ReadinessDependencies;
@@ -23,6 +25,7 @@ export interface BuildApiOptions {
   readonly phaseFour?: AdminPhaseFourRouteOptions;
   readonly phaseFive?: AdminPhaseFiveRouteOptions;
   readonly publicVerification?: PublicVerificationRouteOptions;
+  readonly publicDownloadAuthorization?: PublicDownloadAuthorizationRouteOptions;
 }
 
 export const buildApi = ({
@@ -34,7 +37,8 @@ export const buildApi = ({
   phaseThree,
   phaseFour,
   phaseFive,
-  publicVerification
+  publicVerification,
+  publicDownloadAuthorization
 }: BuildApiOptions): FastifyInstance => {
   const app = Fastify({
     genReqId: () => randomUUID(),
@@ -69,5 +73,8 @@ export const buildApi = ({
   if (phaseFour !== undefined) registerAdminPhaseFourRoutes(app, phaseFour);
   if (phaseFive !== undefined) registerAdminPhaseFiveRoutes(app, phaseFive);
   if (publicVerification !== undefined) registerPublicVerificationRoutes(app, publicVerification);
+  if (publicDownloadAuthorization !== undefined) {
+    registerPublicDownloadAuthorizationRoutes(app, publicDownloadAuthorization);
+  }
   return app;
 };

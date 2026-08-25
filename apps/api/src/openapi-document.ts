@@ -8,6 +8,7 @@ import {
   TemplateAssetListResponseSchema, TemplateAssetResponseSchema, TemplateListResponseSchema, TemplatePreviewResponseSchema,
   TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
   UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema,
+  PublicDownloadAuthorizationRequestSchema, PublicDownloadAuthorizationResponseSchema,
   PublicVerificationRequestSchema, PublicVerificationResponseSchema
 } from "@certificate-platform/contracts";
 import { z } from "zod";
@@ -142,6 +143,10 @@ export const openApiDocument = {
     },
     "/api/public/verify": { post: { security: [], requestBody: jsonRequest(PublicVerificationRequestSchema),
       responses: { ...response(200, PublicVerificationResponseSchema), ...response(400, ErrorResponseSchema),
+        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } },
+    "/api/public/certificates/download-authorize": { post: { security: [],
+      requestBody: jsonRequest(PublicDownloadAuthorizationRequestSchema),
+      responses: { ...response(200, PublicDownloadAuthorizationResponseSchema), ...response(400, ErrorResponseSchema),
         ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } }
   }
 } as const;

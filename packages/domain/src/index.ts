@@ -27,6 +27,15 @@ export {
   type CertificateLifecycleStatus
 } from "./certificate-generation-policy.js";
 export {
+  CERTIFICATE_DOWNLOAD_TOKEN_MAX_BYTES,
+  CERTIFICATE_DOWNLOAD_TOKEN_MAX_TTL_SECONDS,
+  InvalidCertificateDownloadTokenError,
+  createCertificateDownloadToken,
+  verifyCertificateDownloadToken,
+  type CertificateDownloadTokenInput,
+  type VerifiedCertificateDownloadToken
+} from "./certificate-download-token.js";
+export {
   CERTIFICATE_VERIFICATION_TOKEN_MAX_BYTES,
   InvalidCertificateVerificationTokenError,
   createCertificateVerificationToken,

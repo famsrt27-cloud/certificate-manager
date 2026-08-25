@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import { PublicVerificationRateLimiter } from "@certificate-platform/auth";
-import { closeDatabase, createDatabase, findPublicCertificateVerification } from "@certificate-platform/database";
-import { createCertificateVerificationToken } from "@certificate-platform/domain";
+import { closeDatabase, createDatabase, findPublicCertificateDownloadAuthorization,
+  findPublicCertificateVerification } from "@certificate-platform/database";
+import { createCertificateVerificationToken, verifyCertificateDownloadToken } from "@certificate-platform/domain";
 import { closeRedis, connectRedis, createRedisConnection } from "@certificate-platform/queue";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApi } from "../../src/app.js";
 import { createAuthRedisStore } from "../../src/infrastructure/auth-redis-store.js";
 import { PublicVerificationService } from "../../src/modules/phase-six/public-verification-service.js";
+import { PublicDownloadAuthorizationService } from "../../src/modules/phase-six/public-download-authorization-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const redisUrl = process.env.TEST_REDIS_URL;
@@ -88,7 +90,9 @@ describe.skipIf(!enabled)("public certificate verification integration", () => {
   };
   const genericError = (requestId: unknown) => ({ error: { code: "PUBLIC_REQUEST_FAILED",
     message: "The request could not be completed." }, meta: { request_id: requestId } });
-  const createApp = (rateLimiter: PublicVerificationRateLimiter) => buildApi({
+  const createApp = (rateLimiter: PublicVerificationRateLimiter,
+    downloadRateLimiter = new PublicVerificationRateLimiter(redisStore, { secret: rateLimitSecret, windowSeconds: 60,
+      networkMaximum: 100, keyPrefix: `test:public-download-authorize:${randomUUID()}:` })) => buildApi({
     dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
     readinessTimeoutMs: 1_000,
     logger: false,
@@ -96,6 +100,13 @@ describe.skipIf(!enabled)("public certificate verification integration", () => {
       rateLimiter,
       service: new PublicVerificationService({ verificationKeys,
         repository: { findByPublicIdentifier: (identifier) => findPublicCertificateVerification(database, identifier) } })
+    },
+    publicDownloadAuthorization: {
+      rateLimiter: downloadRateLimiter,
+      service: new PublicDownloadAuthorizationService({ verificationKeys, activeSigningKeyId: "active-key",
+        activeSigningKey: activeKey, ttlSeconds: 60,
+        repository: { findByPublicIdentifier: (identifier) =>
+          findPublicCertificateDownloadAuthorization(database, identifier) } })
     }
   });
 
@@ -191,6 +202,96 @@ describe.skipIf(!enabled)("public certificate verification integration", () => {
     expect((await request(first.server).post("/api/public/verify").send({ token })).status).toBe(200);
     expect((await request(second.server).post("/api/public/verify").send({ token })).status).toBe(200);
     const limited = await request(first.server).post("/api/public/verify").send({ token });
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+    expect(limited.body).toEqual(genericError(expect.any(String)));
+    expect(JSON.stringify(limited.body)).not.toContain(token);
+    await Promise.all([first.close(), second.close()]);
+  });
+
+  it("issues only a short-lived certificate-scoped download token for a currently AVAILABLE PDF", async () => {
+    const available = records.get("AVAILABLE")!;
+    const response = await request(app.server).post("/api/public/certificates/download-authorize")
+      .send({ token: tokenFor(available.publicIdentifier, "previous-key", previousKey) });
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: { download_token: expect.any(String), expires_in: 60 },
+      meta: { request_id: expect.any(String) } });
+    const verified = verifyCertificateDownloadToken(response.body.data.download_token as string, verificationKeys);
+    expect(verified.publicIdentifier).toBe(available.publicIdentifier);
+    expect(verified.expiresAtSeconds - verified.issuedAtSeconds).toBe(60);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-robots-tag"]).toBe("noindex, nofollow, noarchive");
+    expect(response.headers["x-request-id"]).toBe(response.body.meta.request_id);
+    expect(JSON.stringify(response.body)).not.toMatch(/storage|pdf_|sha|mime|certificate_id|public_identifier|kid|jti/i);
+  });
+
+  it("returns the same generic authorization failure without exposing certificate state or PDF metadata", async () => {
+    const available = records.get("AVAILABLE")!;
+    const valid = tokenFor(available.publicIdentifier);
+    const cases = [
+      "malformed-token",
+      tamperSignature(valid),
+      tokenFor(available.publicIdentifier, "unknown-key", Buffer.alloc(32, 15)),
+      tokenFor("f".repeat(32)),
+      tokenFor(records.get("DRAFT")!.publicIdentifier),
+      tokenFor(records.get("GENERATING")!.publicIdentifier),
+      tokenFor(records.get("REVOKED")!.publicIdentifier)
+    ];
+    for (const token of cases) {
+      const response = await request(app.server).post("/api/public/certificates/download-authorize").send({ token });
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual(genericError(expect.any(String)));
+      expect(JSON.stringify(response.body)).not.toMatch(/revok|draft|generat|storage|pdf|mime|signature|kid/i);
+    }
+  });
+
+  it("fails generically at the service boundary if trusted publication metadata is corrupted", async () => {
+    const corrupted = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
+      readinessTimeoutMs: 1_000, logger: false, publicDownloadAuthorization: {
+        rateLimiter: new PublicVerificationRateLimiter(redisStore, { secret: rateLimitSecret, windowSeconds: 60,
+          networkMaximum: 100, keyPrefix: `test:public-download-corrupt:${randomUUID()}:` }),
+        service: new PublicDownloadAuthorizationService({ verificationKeys, activeSigningKeyId: "active-key",
+          activeSigningKey: activeKey, ttlSeconds: 60, repository: { findByPublicIdentifier: async (identifier) => {
+            const record = await findPublicCertificateDownloadAuthorization(database, identifier);
+            return record === null ? null : { ...record, pdfMimeType: "application/octet-stream" };
+          } } })
+      } });
+    await corrupted.ready();
+    const response = await request(corrupted.server).post("/api/public/certificates/download-authorize")
+      .send({ token: tokenFor(records.get("AVAILABLE")!.publicIdentifier) });
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual(genericError(expect.any(String)));
+    await corrupted.close();
+  });
+
+  it("accepts authorization tokens only in a strict POST body", async () => {
+    for (const body of [{}, { token: "" }, { token: 1 }, { token: "x", extra: true },
+      { token: "x".repeat(2_049) }]) {
+      const response = await request(app.server).post("/api/public/certificates/download-authorize").send(body);
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual(genericError(expect.any(String)));
+    }
+    const token = tokenFor(records.get("AVAILABLE")!.publicIdentifier);
+    expect((await request(app.server).get(`/api/public/certificates/download-authorize?token=${encodeURIComponent(token)}`)).status)
+      .toBe(404);
+    expect((await request(app.server).post(`/api/public/certificates/download-authorize/${encodeURIComponent(token)}`)).status)
+      .toBe(404);
+    expect((await request(app.server).post("/api/public/certificates/download").send({ download_token: "not-implemented" })).status)
+      .toBe(404);
+  });
+
+  it("shares download-authorization rate limits across API instances with a separate Redis bucket", async () => {
+    const prefix = `test:public-download-authorize-distributed:${randomUUID()}:`;
+    const limiterOptions = { secret: rateLimitSecret, windowSeconds: 60, networkMaximum: 2, keyPrefix: prefix };
+    const first = createApp(new PublicVerificationRateLimiter(redisStore, { ...limiterOptions,
+      keyPrefix: `${prefix}verification:first:` }), new PublicVerificationRateLimiter(redisStore, limiterOptions));
+    const second = createApp(new PublicVerificationRateLimiter(redisStore, { ...limiterOptions,
+      keyPrefix: `${prefix}verification:second:` }), new PublicVerificationRateLimiter(redisStore, limiterOptions));
+    await Promise.all([first.ready(), second.ready()]);
+    const token = tokenFor(records.get("AVAILABLE")!.publicIdentifier);
+    expect((await request(first.server).post("/api/public/certificates/download-authorize").send({ token })).status).toBe(200);
+    expect((await request(second.server).post("/api/public/certificates/download-authorize").send({ token })).status).toBe(200);
+    const limited = await request(first.server).post("/api/public/certificates/download-authorize").send({ token });
     expect(limited.status).toBe(429);
     expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
     expect(limited.body).toEqual(genericError(expect.any(String)));
