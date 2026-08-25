@@ -69,6 +69,9 @@
 - Custom JSON template schemas allow only documented element types, bindings and properties; the data binder resolves only allowlisted fields.
 - Arbitrary JavaScript, local file access, path traversal and unrestricted remote resource loading are forbidden.
 - Renderer workers use bounded concurrency and isolated temporary directories that are cleaned after every attempt.
+- The renderer package is capability-minimized: no direct database, Redis/BullMQ, S3, authentication, signing-key, filesystem-path or network-client dependency is permitted. The worker resolves those capabilities before rendering.
+- The render input is strict and versioned. Unknown fields are rejected; referenced assets must be exact, purpose/MIME-compatible and hash-matched to the immutable asset identity; caller-owned byte arrays are copied before rendering.
+- The renderer accepts a prepared verification URL only. It cannot sign or rotate verification tokens and therefore never receives signing secrets.
 
 ### Phase 3 participant-import operating limits
 
@@ -109,5 +112,6 @@ Prohibited by default:
 - malicious CSV/XLSX/image/font uploads
 - template injection, XSS, SSRF and path traversal
 - renderer resource exhaustion
+- renderer dependency-capability drift, extra secret/infrastructure input fields, asset hash mismatch and verification-token query-string transport
 - bcrypt 72-byte boundary, session fixation/rotation and CSRF replay
 - secret/PII log leakage

@@ -109,6 +109,20 @@ Existing certificates remain tied to their original version.
 
 Publishing must be atomic: validate the definition, bindings, asset ownership and asset status, then set `PUBLISHED` and `published_at` in one transaction. A generation job accepts only a published version from the same organization.
 
+## Renderer handoff contract
+
+The template engine does not load infrastructure resources. The trusted worker loads the immutable published template and validated private asset bytes, maps the issuance snapshot into the allowlisted binding context, obtains the final verification URL from the trusted token/application boundary, and then calls `packages/certificate-renderer`.
+
+The renderer boundary accepts only:
+
+- format-version-validated template data
+- issuance-snapshot binding values plus immutable certificate number/date
+- the server-selected renderer revision
+- the final verification URL string
+- exactly the template-referenced validated asset bytes with purpose, canonical MIME and SHA-256 identity
+
+Storage keys, database objects, Redis/queue objects, signing keys, raw token services, local paths and remote fetch instructions are not renderer inputs.
+
 ## Deterministic rendering contract
 
 - Validate and normalize page dimensions, positions, colors, font references and element ordering before rendering.

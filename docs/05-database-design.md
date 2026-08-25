@@ -2,7 +2,7 @@
 
 ## Authority
 
-This document defines PostgreSQL 16 integrity rules. `docs/08-erd.md` describes relationships and `docs/09-postgresql-schema.sql` is the canonical reference schema. Phase 1 migrations are implemented with node-pg-migrate, and application queries use Kysely. This specification file is not itself a migration.
+This document defines the current PostgreSQL 16 integrity rules. `docs/08-erd.md` describes the current logical relationships. `docs/09-postgresql-schema.sql` is the frozen Phase 0 / migration-0001 schema snapshot and must not be edited to represent later schema evolution. Applied schema evolution after migration 0001 is authoritative in the append-only files under `packages/database/migrations/`. Application queries use Kysely, and this specification file is not itself a migration.
 
 ## Implementation ownership
 
@@ -60,6 +60,8 @@ Import source objects are removed after validation staging. Successful confirmat
 - `jobs` stores shared state, progress, attempts and organization-scoped idempotency keys.
 - Job detail tables bind a job to its domain inputs.
 - Certificate generation uses item rows with a deterministic `(certificate_id, generation_revision)` uniqueness boundary.
+- Generation-job detail stores immutable `selection_mode`, a 32-byte request fingerprint of the exact first-resolved participant set and the server-selected `renderer_revision`.
+- An omitted participant list is resolved exactly once at first job creation; the resulting participant set is materialized as certificate/item rows in the same PostgreSQL transaction before queue intent becomes visible. Workers never re-resolve "all eligible" from mutable live rows.
 - Retried work updates the same item/revision and cannot create a duplicate certificate.
 - `DEAD_LETTER` is an explicit terminal state requiring controlled operator action.
 - BullMQ is the delivery mechanism; PostgreSQL job/item state remains authoritative for progress, idempotency and recovery.
@@ -75,10 +77,18 @@ Import source objects are removed after validation staging. Successful confirmat
 
 ## Certificate and PDF integrity
 
-- Certificates retain their original `template_version_id`.
+- A certificate is created only as a clean `DRAFT` at generation revision 1.
+- Certificate identity is immutable after creation: public identifier, organization, training, participant, published template version and certificate number cannot be replaced.
+- Before a certificate may enter `GENERATING`, one immutable `certificate_issuance_snapshots` row must capture the issuance-time recipient display name, project name, training name, training code and planned `issued_at`. Later edits to the live participant/project/training rows do not alter historical rendering or public verification meaning.
+- Snapshot rows are append-once: they may be inserted only while the parent certificate is `DRAFT` and cannot be updated or deleted.
+- The Phase 5 initial lifecycle is `DRAFT → GENERATING → AVAILABLE → REVOKED`. `REVOKED` is terminal. Existing enum states `ISSUED` and `ARCHIVED` are reserved and are not entered by the Phase 5 contract until a later reviewed migration explicitly defines their semantics.
 - `AVAILABLE` requires issue timestamp, private storage key, SHA-256 hash, size and `application/pdf` MIME metadata.
-- Revocation records current state and timestamp; public download checks that state on every authorization and redemption.
-- Regeneration increments `generation_revision` and retains an auditable job/item trail.
+- Initial publication and regeneration publication require a `SUCCEEDED` generation item for the exact certificate, template and revision. Initial publication must persist the exact planned `issued_at` from the immutable issuance snapshot.
+- At most one non-revoked certificate may exist for one organization/training/participant tuple. Initial generation treats any certificate history as ineligible for a new initial issue; after revocation, a brand-new certificate/public identifier/number may be created only by an explicit reissue operation defined by a reviewed API contract.
+- Regeneration keeps an already-available certificate available while rendering the next revision. Publishing a regenerated PDF atomically advances `generation_revision` by exactly one and replaces the PDF integrity metadata. The original `issued_at` does not change.
+- PDF identity cannot be overwritten without a revision advance. This makes stale workers fail closed after another worker has already published the same or a newer revision.
+- Certificate generation-job detail rows are immutable durable inputs after insertion.
+- Revocation metadata is immutable after revocation; public download checks current state on every authorization and redemption.
 
 ## Audit and event data
 

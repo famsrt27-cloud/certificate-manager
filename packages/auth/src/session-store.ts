@@ -9,6 +9,10 @@ export interface AuthRedisStore {
   incrementWithExpiry(key: string, ttlSeconds: number): Promise<{ count: number; ttlSeconds: number }>;
 }
 
+export interface SessionRedisStore extends AuthRedisStore {
+  setWithExpiryIfExists(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+}
+
 export interface SessionConfiguration {
   readonly secret: string;
   readonly idleTtlSeconds: number;
@@ -34,7 +38,7 @@ export interface CreatedSession {
 }
 
 export interface SessionStoreOptions {
-  readonly redis: AuthRedisStore;
+  readonly redis: SessionRedisStore;
   readonly configuration: SessionConfiguration;
   readonly now?: () => number;
   readonly randomToken?: () => string;
@@ -43,7 +47,7 @@ export interface SessionStoreOptions {
 const defaultRandomToken = (): string => randomBytes(32).toString("base64url");
 
 export class RedisSessionStore {
-  readonly #redis: AuthRedisStore;
+  readonly #redis: SessionRedisStore;
   readonly #configuration: SessionConfiguration;
   readonly #now: () => number;
   readonly #randomToken: () => string;
@@ -105,9 +109,20 @@ export class RedisSessionStore {
       await this.revoke(sessionId);
       return null;
     }
+    const remainingAbsoluteSeconds = Math.ceil((record.absoluteExpiresAt - now) / 1_000);
+    const ttl = Math.min(this.#configuration.idleTtlSeconds, remainingAbsoluteSeconds);
+    if (ttl <= 0) {
+      await this.revoke(sessionId);
+      return null;
+    }
+
     const touched = { ...record, lastSeenAt: now };
-    await this.#write(sessionId, touched);
-    return touched;
+    const updated = await this.#redis.setWithExpiryIfExists(
+      this.#key(sessionId),
+      JSON.stringify(touched),
+      ttl
+    );
+    return updated ? touched : null;
   }
 
   async revoke(sessionId: string): Promise<void> {

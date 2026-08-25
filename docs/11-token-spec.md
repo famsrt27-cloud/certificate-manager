@@ -65,6 +65,8 @@ Malformed, invalid-signature and unknown-identifier cases produce the same publi
 
 The certificate verification token is stable for the certificate and does not use expiry as a substitute for revocation. It is a bearer capability: anyone possessing it can view the minimal public verification result. Current database state remains authoritative.
 
+For deterministic certificate rendering, verification-token time/key inputs cannot depend on the current render attempt. The verification-token `iat` for an issued certificate is derived from the immutable planned issuance timestamp, not `Date.now()` during PDF generation. Key selection for an existing certificate must also remain stable across ordinary regeneration (for example by retaining a non-secret `kid` association or another reviewed immutable rule). The renderer is not allowed to make this choice: trusted application/token code produces the complete verification URL and passes only that string into rendering.
+
 A stable token cannot authorize direct storage access. PDF access always requires a separate short-lived download token and a fresh state check.
 
 ## Download token
@@ -106,7 +108,7 @@ If signing and verification later move to different trust domains, adopt an appr
 
 - `kid` is required in the protected header.
 - Maintain one active signing key and an explicitly approved set of previous verification keys.
-- New tokens use only the active key.
+- Newly issued certificate tokens use the active key selected at first issuance. Ordinary regeneration of an existing certificate retains its approved certificate key selection so the stable verification token does not change merely because a deployment rotated the current signing key.
 - Removed/compromised keys fail closed.
 - Keys come from the approved secret-management mechanism and are never stored in source or the application database.
 - Rotation, compromise and retirement procedures must be tested before production.

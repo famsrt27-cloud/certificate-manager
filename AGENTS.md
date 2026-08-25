@@ -20,6 +20,13 @@ Certificate Management & Public Verification Platform.
 - Prefer small, reviewable changes.
 - Keep certificate rendering deterministic and versioned.
 - Certificate PDFs must remain tied to the template version used to issue them.
+- Certificate issuance identity and the issuance-time binding snapshot are immutable.
+- Renderers must consume immutable/versioned certificate inputs, never mutable live participant/project/training rows.
+- A revoked certificate is terminal and must never become available again.
+- Stale generation revisions must never overwrite the current certificate revision or PDF identity.
+- Certificate generation idempotency is bound to the exact first-resolved participant set; workers must never re-resolve a later population.
+- Initial generation must not silently reissue a participant with certificate history; reissue requires an explicit reviewed operation after revocation.
+- The planned issuance timestamp and renderer revision are durable immutable generation inputs.
 
 ## Security rules
 - Use cryptographically secure randomness for public tokens.
@@ -30,6 +37,8 @@ Certificate Management & Public Verification Platform.
 - Do not log passwords, tokens, session secrets, or unnecessary PII.
 - Validate and sanitize uploaded assets.
 - Treat PDF/HTML rendering as an untrusted execution boundary.
+- The certificate renderer receives only strict validated render data and validated asset bytes; it must not import database, storage, queue, auth, network, filesystem or signing-key capabilities.
+- The renderer never signs verification tokens. A trusted application/worker boundary prepares the final verification URL and passes only that string to rendering.
 - Public certificate pages should be non-indexable.
 
 ## Testing

@@ -12,6 +12,7 @@ export type RoleCode = "SUPER_ADMIN" | "ORG_ADMIN" | "CERTIFICATE_MANAGER" | "TE
 export type JobType = "PARTICIPANT_IMPORT" | "CERTIFICATE_GENERATION";
 export type JobStatus = "QUEUED" | "RUNNING" | "AWAITING_CONFIRMATION" | "SUCCEEDED" | "FAILED" | "DEAD_LETTER" | "CANCELLED";
 export type JobItemStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "DEAD_LETTER" | "SKIPPED";
+export type CertificateGenerationSelectionMode = "ALL_ELIGIBLE" | "EXPLICIT";
 export type ImportRowStatus = "PENDING" | "VALID" | "INVALID" | "IMPORTED" | "FAILED";
 export type TemplateAssetStatus = "QUARANTINED" | "ACTIVE" | "REJECTED" | "ARCHIVED";
 
@@ -159,6 +160,36 @@ export interface ParticipantImportJobsTable {
   detected_mime_type: string;
   size_bytes: string;
   confirmed_at: NullableTimestamp;
+  source_cleanup_requested_at: NullableTimestamp;
+  source_cleanup_completed_at: NullableTimestamp;
+  source_cleanup_attempt_count: Generated<number>;
+  source_cleanup_last_attempt_at: NullableTimestamp;
+  source_cleanup_last_error_code: string | null;
+  retention_cleanup_completed_at: NullableTimestamp;
+}
+
+export interface QueueOutboxTable {
+  id: Generated<string>;
+  organization_id: string;
+  message_type: string;
+  deduplication_key: string;
+  payload_json: JsonValue;
+  dispatched_at: NullableTimestamp;
+  attempt_count: Generated<number>;
+  last_attempt_at: NullableTimestamp;
+  last_error_code: string | null;
+  created_at: GeneratedTimestamp;
+}
+
+export interface StorageCleanupOutboxTable {
+  id: Generated<string>;
+  organization_id: string;
+  object_key: string;
+  not_before: Timestamp;
+  attempt_count: Generated<number>;
+  last_attempt_at: NullableTimestamp;
+  last_error_code: string | null;
+  created_at: GeneratedTimestamp;
 }
 
 export interface ParticipantImportRowsTable {
@@ -188,6 +219,9 @@ export interface CertificateGenerationJobsTable {
   training_id: string;
   template_version_id: string;
   generation_revision: Generated<number>;
+  selection_mode: CertificateGenerationSelectionMode;
+  request_fingerprint: Uint8Array;
+  renderer_revision: string;
 }
 
 export interface CertificatesTable extends TimestampedTable {
@@ -206,6 +240,18 @@ export interface CertificatesTable extends TimestampedTable {
   issued_at: NullableTimestamp;
   revoked_at: NullableTimestamp;
   revocation_reason: string | null;
+}
+
+export interface CertificateIssuanceSnapshotsTable {
+  certificate_id: string;
+  organization_id: string;
+  snapshot_schema_version: Generated<number>;
+  recipient_display_name: string;
+  project_name: string;
+  training_name: string;
+  training_code: string;
+  issued_at: Timestamp;
+  created_at: GeneratedTimestamp;
 }
 
 export interface CertificateGenerationItemsTable extends TimestampedTable {
@@ -261,10 +307,13 @@ export interface Database {
   template_version_assets: TemplateVersionAssetsTable;
   jobs: JobsTable;
   participant_import_jobs: ParticipantImportJobsTable;
+  queue_outbox: QueueOutboxTable;
+  storage_cleanup_outbox: StorageCleanupOutboxTable;
   participant_import_rows: ParticipantImportRowsTable;
   training_participants: TrainingParticipantsTable;
   certificate_generation_jobs: CertificateGenerationJobsTable;
   certificates: CertificatesTable;
+  certificate_issuance_snapshots: CertificateIssuanceSnapshotsTable;
   certificate_generation_items: CertificateGenerationItemsTable;
   audit_logs: AuditLogsTable;
   verification_events: VerificationEventsTable;

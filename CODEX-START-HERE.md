@@ -1,8 +1,10 @@
 # Codex — Start Here
 
-ไฟล์นี้เป็น canonical entry point ของ repository
+ไฟล์นี้เป็น canonical entry point ของ repository สำหรับ Coding Agent
 
-ให้ Coding Agent อ่านไฟล์ตามลำดับ:
+## Read order
+
+ก่อนแก้โค้ดให้อ่านตามลำดับ:
 
 1. `AGENTS.md`
 2. `README.md`
@@ -15,13 +17,40 @@
 9. `docs/04-repository-layout-and-naming.md`
 10. `docs/05-database-design.md`
 11. `docs/07-testing-strategy.md`
-12. `docs/24-adr.md`
-13. `docs/14-zcode-glm-workflow.md`
+12. `docs/08-erd.md`
+13. `docs/10-api-contract.md`
+14. `docs/11-token-spec.md`
+15. `docs/12-template-engine.md`
+16. `docs/13-pdf-generation.md`
+17. `docs/24-adr.md`
 
-จากนั้นให้อ่านเอกสารเฉพาะ Phase ที่กำลังทำ รวมถึง ERD, schema และ API contract เมื่อ Phase นั้นเกี่ยวข้อง
+จากนั้นอ่าน implementation/migrations/tests ของ Phase ที่กำลังทำ
 
-จากนั้นให้ทำ Phase 0 ก่อน และห้ามสร้างทั้งระบบในครั้งเดียว
+## Current repository checkpoint
 
-คำสั่งเริ่มต้นที่แนะนำ:
+- Phases 1–4 are implemented.
+- Phase 4.5 stabilization/integrity work establishes the entry contract for Phase 5.
+- Phase 5 application/worker PDF generation is not implemented yet.
+- `docs/09-postgresql-schema.sql` and `packages/database/schema/0001-canonical-schema.sql` are frozen migration-0001 snapshots. Do not edit them to represent later schema changes; use append-only migrations.
+- Read migrations `202608240006_certificate-integrity-foundation.ts` and `202608240007_certificate-generation-contract.ts` before implementing certificate generation.
+- Read ADR-016, ADR-017 and ADR-018 before touching certificate lifecycle, job planning, regeneration, reissue, verification URL or renderer code.
 
-"Read AGENTS.md, CODEX-START-HERE.md, and the project documentation in the prescribed order. Work only on the approved phase and locked TypeScript/pnpm stack. Do not change technology, architecture, security controls, database contracts, or API contracts without updating the governing documents and ADRs."
+## Phase 5 entry invariants
+
+Do not implement Phase 5 in a way that violates these rules:
+
+- certificate identity and issuance snapshot are immutable
+- planned issue time comes from the immutable snapshot
+- revoked certificates never become available again
+- only one non-revoked certificate exists per training participant
+- initial generation does not silently reissue certificate history
+- generation idempotency binds to the exact first-resolved participant set
+- an ALL_ELIGIBLE retry never re-resolves a later population
+- renderer revision is immutable per generation job
+- stale generation revisions cannot overwrite a newer PDF/revision
+- `packages/certificate-renderer` is capability-minimized and receives no DB/S3/Redis/signing/network capability
+- renderer receives a prepared verification URL only; it never signs tokens
+
+## Change rule
+
+Work only on the approved phase and locked TypeScript/pnpm stack. Do not change technology, architecture, security controls, database contracts, API contracts or the invariants above without updating the governing documents, tests and ADRs in the same change.

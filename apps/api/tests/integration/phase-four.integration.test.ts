@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { closeDatabase, createDatabase, insertAuditRecord } from "@certificate-platform/database";
+import {
+  archiveTemplateAssetInTransaction,
+  closeDatabase,
+  createDatabase,
+  insertAuditRecord,
+  publishTemplateVersionInTransaction
+} from "@certificate-platform/database";
 import type { EffectiveIdentity } from "@certificate-platform/domain";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import request from "supertest";
@@ -25,7 +31,9 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
   const otherMembershipId = randomUUID();
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
+  let failStorageDeletes = false;
   let app: ReturnType<typeof buildApi>;
+  let service: PhaseFourService;
   let templateId = "";
   let assetId = "";
   let versionId = "";
@@ -58,10 +66,13 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     const storage: PrivateObjectStorage = {
       put: async (input) => { objects.set(input.key, input.body); },
       get: async (key) => objects.get(key) ?? Promise.reject(new Error("missing synthetic object")),
-      delete: async (key) => { objects.delete(key); }
+      delete: async (key) => {
+        if (failStorageDeletes) throw new Error("synthetic storage delete failure");
+        objects.delete(key);
+      }
     };
     const testCursorKey = "synthetic-cursor-fixture-value-at-least-32-bytes";
-    const service = new PhaseFourService({ database, storage, audit, cursorSecret: testCursorKey });
+    service = new PhaseFourService({ database, storage, cursorSecret: testCursorKey });
     app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
       readinessTimeoutMs: 100, logger: false, phaseFour: { authentication,
         authorization: new OrganizationAuthorizationService(authentication, audit), service, templateAssetMaxBytes: 1_024 * 1_024 } });
@@ -104,6 +115,222 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(published.status).toBe(200);
     expect(published.body.data.status).toBe("PUBLISHED");
     expect(published.body.data.published_at).toBeTruthy();
+  });
+
+  it("rolls back an asset row and removes stored content when its audit insert fails", async () => {
+    const objectCountBefore = objects.size;
+    const filename = `audit-rollback-${randomUUID()}.png`;
+    await expect(service.uploadAsset({
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    }, templateId, {
+      filename,
+      declaredMimeType: "image/png",
+      bytes: onePixelPng
+    }, "not-a-uuid")).rejects.toBeDefined();
+
+    expect(objects.size).toBe(objectCountBefore);
+    const persisted = await database.selectFrom("template_assets").select("id")
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .where("original_filename", "=", filename)
+      .executeTakeFirst();
+    expect(persisted).toBeUndefined();
+  });
+
+  it("keeps a durable cleanup intent when immediate object compensation fails", async () => {
+    const objectCountBefore = objects.size;
+    failStorageDeletes = true;
+    try {
+      await expect(service.uploadAsset({
+        organizationId,
+        actorUserId: userId,
+        actorMembershipId: membershipId,
+        membership: null,
+        superAdmin: false
+      }, templateId, {
+        filename: `durable-cleanup-${randomUUID()}.png`,
+        declaredMimeType: "image/png",
+        bytes: onePixelPng
+      }, "not-a-uuid")).rejects.toBeDefined();
+    } finally {
+      failStorageDeletes = false;
+    }
+
+    expect(objects.size).toBe(objectCountBefore + 1);
+    const cleanup = await database.selectFrom("storage_cleanup_outbox")
+      .select(["id", "object_key"])
+      .where("organization_id", "=", organizationId)
+      .orderBy("created_at", "desc")
+      .executeTakeFirstOrThrow();
+    expect(objects.has(cleanup.object_key)).toBe(true);
+
+    objects.delete(cleanup.object_key);
+    await database.deleteFrom("storage_cleanup_outbox").where("id", "=", cleanup.id).execute();
+  });
+
+  it("does not persist a ghost draft when version creation references an invalid asset", async () => {
+    const context = {
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    } as const;
+    const missingAssetId = randomUUID();
+    const definition = {
+      format_version: 1 as const,
+      page: { width: 500, height: 300, unit: "px" as const },
+      elements: [{
+        type: "image" as const,
+        x: 10,
+        y: 10,
+        width: 50,
+        height: 50,
+        opacity: 1,
+        asset_id: missingAssetId,
+        fit: "contain" as const
+      }]
+    };
+
+    const before = await database.selectFrom("template_versions")
+      .select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .executeTakeFirstOrThrow();
+
+    await expect(service.createVersion(context, templateId, { definition }, randomUUID()))
+      .rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+
+    const after = await database.selectFrom("template_versions")
+      .select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .executeTakeFirstOrThrow();
+    expect(Number(after.count)).toBe(Number(before.count));
+  });
+
+  it("holds referenced asset locks through publish so a concurrent archive cannot invalidate the published version", async () => {
+    const context = {
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    } as const;
+    const template = await service.createTemplate(context, { name: `Publish race ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, template.id, {
+      filename: `publish-race-${randomUUID()}.png`,
+      declaredMimeType: "image/png",
+      bytes: onePixelPng
+    }, randomUUID());
+    const definition = {
+      format_version: 1 as const,
+      page: { width: 500, height: 300, unit: "px" as const },
+      elements: [{
+        type: "image" as const,
+        x: 10,
+        y: 10,
+        width: 50,
+        height: 50,
+        opacity: 1,
+        asset_id: asset.id,
+        fit: "contain" as const
+      }]
+    };
+    const draft = await service.createVersion(context, template.id, { definition }, randomUUID());
+
+    let releasePublish!: () => void;
+    let publishHasLockedAssets!: () => void;
+    const publishLocked = new Promise<void>((resolve) => { publishHasLockedAssets = resolve; });
+    const publishRelease = new Promise<void>((resolve) => { releasePublish = resolve; });
+
+    const publishing = database.transaction().execute(async (transaction) => {
+      const outcome = await publishTemplateVersionInTransaction(transaction, {
+        organizationId,
+        templateId: template.id,
+        versionId: draft.id,
+        validateDefinition: () => {
+          publishHasLockedAssets();
+          return true;
+        }
+      });
+      expect(outcome).toBe("PUBLISHED");
+      await publishRelease;
+    });
+
+    await publishLocked;
+
+    const archiveOutcome = database.transaction().execute((transaction) =>
+      archiveTemplateAssetInTransaction(transaction, organizationId, template.id, asset.id)
+    ).then(
+      (value) => ({ status: "resolved" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error })
+    );
+
+    const race = await Promise.race([
+      archiveOutcome.then(() => "settled" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 100))
+    ]);
+    expect(race).toBe("pending");
+
+    releasePublish();
+    await publishing;
+
+    const archived = await archiveOutcome;
+    expect(archived.status).toBe("rejected");
+    if (archived.status === "rejected") expect(archived.error).toMatchObject({ code: "P0001" });
+
+    const persisted = await database.selectFrom("template_versions")
+      .select("status")
+      .where("organization_id", "=", organizationId)
+      .where("id", "=", draft.id)
+      .executeTakeFirstOrThrow();
+    expect(persisted.status).toBe("PUBLISHED");
+  });
+
+  it("rolls back version creation and publish transition when their audit insert fails", async () => {
+    const context = {
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    } as const;
+    const definition = {
+      format_version: 1 as const,
+      page: { width: 500, height: 300, unit: "px" as const },
+      elements: []
+    };
+
+    const before = await database.selectFrom("template_versions")
+      .select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .executeTakeFirstOrThrow();
+
+    await expect(service.createVersion(context, templateId, { definition }, "not-a-uuid")).rejects.toBeDefined();
+
+    const after = await database.selectFrom("template_versions")
+      .select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId)
+      .where("template_id", "=", templateId)
+      .executeTakeFirstOrThrow();
+    expect(Number(after.count)).toBe(Number(before.count));
+
+    const draft = await service.createVersion(context, templateId, { definition }, randomUUID());
+    await expect(service.publishVersion(context, templateId, draft.id, "not-a-uuid")).rejects.toBeDefined();
+
+    const persisted = await database.selectFrom("template_versions")
+      .select(["status", "published_at"])
+      .where("organization_id", "=", organizationId)
+      .where("id", "=", draft.id)
+      .executeTakeFirstOrThrow();
+    expect(persisted.status).toBe("DRAFT");
+    expect(persisted.published_at).toBeNull();
   });
 
   it("enforces tenant isolation even when the actor is a member of both tenants", async () => {

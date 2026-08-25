@@ -7,7 +7,7 @@ import {
 
 describe("participant import queue contract", () => {
   it("uses the stable versioned queue name and minimum internal payload", () => {
-    expect(PARTICIPANT_IMPORT_QUEUE_NAME).toBe("participant-import:v1");
+    expect(PARTICIPANT_IMPORT_QUEUE_NAME).toBe("participant-import-v1");
     expect(ParticipantImportJobPayloadSchema.parse({
       version: 1,
       job_id: "00000000-0000-4000-8000-000000000001",

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This ERD reflects the Phase 0 database contract in `docs/09-postgresql-schema.sql`. Internal primary keys are UUIDs. Public verification uses a separate random `certificates.public_identifier` and never exposes `certificates.id`.
+This ERD reflects the current logical database contract, including append-only migrations after the frozen Phase 0 snapshot in `docs/09-postgresql-schema.sql`. Internal primary keys are UUIDs. Public verification uses a separate random `certificates.public_identifier` and never exposes `certificates.id`.
 
 ## Core relationships
 
@@ -13,6 +13,7 @@ This ERD reflects the Phase 0 database contract in `docs/09-postgresql-schema.sq
 - Background work uses a common job plus import/generation detail and item rows.
 - Template versions and their asset links become immutable after publication.
 - Certificates remain tied to the published template version and generation revision used to render them.
+- Each certificate has exactly one immutable issuance snapshot containing the issuance-time human-readable binding values that would otherwise come from mutable participant/project/training rows.
 
 ## Mermaid ERD
 
@@ -48,6 +49,7 @@ erDiagram
 
     TRAINING_PARTICIPANTS ||--o{ CERTIFICATES : receives
     TEMPLATE_VERSIONS ||--o{ CERTIFICATES : renders
+    CERTIFICATES ||--|| CERTIFICATE_ISSUANCE_SNAPSHOTS : freezes
     CERTIFICATES ||--o{ CERTIFICATE_GENERATION_ITEMS : generated_by
     CERTIFICATES ||--o{ VERIFICATION_EVENTS : verifies
     CERTIFICATES ||--o{ DOWNLOAD_EVENTS : downloads
@@ -207,6 +209,9 @@ erDiagram
       uuid training_id FK
       uuid template_version_id FK
       int generation_revision
+      text selection_mode
+      bytea request_fingerprint
+      text renderer_revision
     }
 
     CERTIFICATES {
@@ -226,6 +231,18 @@ erDiagram
       timestamptz issued_at
       timestamptz revoked_at
       text revocation_reason
+    }
+
+    CERTIFICATE_ISSUANCE_SNAPSHOTS {
+      uuid certificate_id PK,FK
+      uuid organization_id FK
+      int snapshot_schema_version
+      text recipient_display_name
+      text project_name
+      text training_name
+      text training_code
+      timestamptz issued_at
+      timestamptz created_at
     }
 
     CERTIFICATE_GENERATION_ITEMS {
@@ -280,9 +297,14 @@ erDiagram
 4. A certificate references an existing `training_participants` tuple in the same organization.
 5. Published/archived template definition fields and asset links are protected by database triggers.
 6. Version-to-asset links require the same organization and template. Assets used by published/archived versions cannot have their rendering content or storage identity changed.
-7. `AVAILABLE` certificates require complete PDF integrity metadata.
-8. Generation item uniqueness prevents the same certificate revision from being generated twice by retries.
-9. Import and generation item triggers require the same training/template/revision as their parent job.
-10. Audit actor membership, organization and user are bound by a composite foreign key; audit log rows are append-only.
+7. Certificate issuance identity and the one-to-one issuance snapshot are immutable; mutable live names cannot rewrite historical certificate meaning.
+8. The initial certificate lifecycle is database-guarded as `DRAFT → GENERATING → AVAILABLE → REVOKED`; revoked certificates are terminal.
+9. `AVAILABLE` certificates require complete PDF integrity metadata, and publication requires a succeeded generation item for the exact revision.
+10. Generation revisions advance exactly one step during regeneration publication; PDF metadata cannot be overwritten at the same revision, so stale writers fail closed.
+11. Generation-job detail rows are immutable and retain selection mode, exact-target request fingerprint and renderer revision. Generation items must target the current revision for initial work or exactly the next revision for regeneration.
+12. The issuance snapshot includes the planned issue time; initial publication must use that exact timestamp.
+13. A partial unique index permits at most one non-revoked certificate for an organization/training/participant tuple. Revoked history does not reuse certificate identity.
+14. Import and generation item triggers require the same training/template/revision as their parent job.
+15. Audit actor membership, organization and user are bound by a composite foreign key; audit log rows are append-only.
 
 The complete signed verification token is intentionally absent from the database.

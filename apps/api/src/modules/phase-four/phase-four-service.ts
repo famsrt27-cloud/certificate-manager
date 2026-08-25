@@ -5,12 +5,15 @@ import type {
   UpdateTemplateVersionRequest
 } from "@certificate-platform/contracts";
 import {
-  archivePublishedTemplateVersion, archiveTemplate, archiveTemplateAsset, createTemplate, createTemplateAsset,
-  createTemplateVersion, deleteDraftTemplateVersion, findTemplate, findTemplateAsset, findTemplateVersion,
-  listTemplateAssets, listTemplates, listTemplateVersions, publishTemplateVersion, updateDraftTemplateVersion, updateTemplate,
-  type DatabaseClient, type JsonValue
+  archivePublishedTemplateVersionInTransaction, archiveTemplateAssetInTransaction, archiveTemplateInTransaction,
+  armStorageCleanup, cancelStorageCleanupInTransaction, completeStorageCleanupByKey,
+  createTemplateAssetInTransaction, createTemplateInTransaction, createTemplateVersionInTransaction,
+  deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateVersion, listTemplateAssets,
+  listTemplates, listTemplateVersions, publishTemplateVersionInTransaction, runAuditedTransaction,
+  updateDraftTemplateVersionInTransaction, updateTemplateInTransaction,
+  type DatabaseClient, type JsonValue, type NewAuditRecord
 } from "@certificate-platform/database";
-import type { AuditAction, AuditWriter } from "@certificate-platform/domain";
+import type { AuditAction } from "@certificate-platform/domain";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import {
   TemplateDefinitionSchema, bindTemplate, collectTemplateAssetRequirements, type TemplateDefinition
@@ -62,27 +65,28 @@ const previewContext = {
 export interface PhaseFourServiceOptions {
   readonly database: DatabaseClient;
   readonly storage: PrivateObjectStorage;
-  readonly audit: AuditWriter;
   readonly cursorSecret: string;
 }
 
 export class PhaseFourService {
   readonly #database: DatabaseClient;
   readonly #storage: PrivateObjectStorage;
-  readonly #audit: AuditWriter;
   readonly #cursors: CursorCodec;
 
   constructor(options: PhaseFourServiceOptions) {
     this.#database = options.database;
     this.#storage = options.storage;
-    this.#audit = options.audit;
     this.#cursors = new CursorCodec(options.cursorSecret);
   }
 
   async createTemplate(context: TenantAuthorizationContext, input: CreateTemplateRequest, requestId: string): Promise<Template> {
-    const template = mapTemplate(await createTemplate(this.#database, context.organizationId, input.name));
-    await this.#writeAudit(context, "TEMPLATE_CREATED", "template", template.id, requestId);
-    return template;
+    return runAuditedTransaction(this.#database, async (transaction) => {
+      const template = mapTemplate(await createTemplateInTransaction(transaction, context.organizationId, input.name));
+      return {
+        result: template,
+        audit: this.#auditRecord(context, "TEMPLATE_CREATED", "template", template.id, requestId)
+      };
+    });
   }
 
   async getTemplate(organizationId: string, templateId: string): Promise<Template> {
@@ -102,30 +106,51 @@ export class PhaseFourService {
   }
 
   async updateTemplate(context: TenantAuthorizationContext, templateId: string, input: UpdateTemplateRequest, requestId: string) {
-    const row = await updateTemplate(this.#database, context.organizationId, templateId, input.name);
-    if (row === undefined) return notFound();
-    const template = mapTemplate(row);
-    await this.#writeAudit(context, "TEMPLATE_UPDATED", "template", template.id, requestId);
-    return template;
+    const template = await runAuditedTransaction(this.#database, async (transaction) => {
+      const row = await updateTemplateInTransaction(transaction, context.organizationId, templateId, input.name);
+      if (row === undefined) return { result: undefined, audit: null };
+      const updated = mapTemplate(row);
+      return {
+        result: updated,
+        audit: this.#auditRecord(context, "TEMPLATE_UPDATED", "template", updated.id, requestId)
+      };
+    });
+    return template === undefined ? notFound() : template;
   }
 
   async archiveTemplate(context: TenantAuthorizationContext, templateId: string, requestId: string) {
-    const row = await archiveTemplate(this.#database, context.organizationId, templateId);
-    if (row === undefined) return notFound();
-    const template = mapTemplate(row);
-    await this.#writeAudit(context, "TEMPLATE_ARCHIVED", "template", template.id, requestId);
-    return template;
+    const template = await runAuditedTransaction(this.#database, async (transaction) => {
+      const row = await archiveTemplateInTransaction(transaction, context.organizationId, templateId);
+      if (row === undefined) return { result: undefined, audit: null };
+      const archived = mapTemplate(row);
+      return {
+        result: archived,
+        audit: this.#auditRecord(context, "TEMPLATE_ARCHIVED", "template", archived.id, requestId)
+      };
+    });
+    return template === undefined ? notFound() : template;
   }
 
   async createVersion(context: TenantAuthorizationContext, templateId: string, input: CreateTemplateVersionRequest, requestId: string) {
     const assetRequirements = collectTemplateAssetRequirements(input.definition);
-    const result = await createTemplateVersion(this.#database, { organizationId: context.organizationId, templateId,
-      definition: input.definition as JsonValue, assetRequirements });
+    const result = await runAuditedTransaction(this.#database, async (transaction) => {
+      const outcome = await createTemplateVersionInTransaction(transaction, {
+        organizationId: context.organizationId,
+        templateId,
+        definition: input.definition as JsonValue,
+        assetRequirements
+      });
+      return {
+        result: outcome,
+        audit: outcome.outcome === "CREATED"
+          ? this.#auditRecord(context, "TEMPLATE_VERSION_CREATED", "template_version", outcome.version.id, requestId)
+          : null
+      };
+    });
     if (result.outcome === "NOT_FOUND") return notFound();
     if (result.outcome === "INVALID_ASSET") return validationFailed();
     const version = await findTemplateVersion(this.#database, context.organizationId, templateId, result.version.id);
     if (version === undefined) return notFound();
-    await this.#writeAudit(context, "TEMPLATE_VERSION_CREATED", "template_version", version.id, requestId);
     return mapVersion(version);
   }
 
@@ -141,18 +166,39 @@ export class PhaseFourService {
 
   async updateVersion(context: TenantAuthorizationContext, templateId: string, versionId: string,
     input: UpdateTemplateVersionRequest, requestId: string) {
-    const outcome = await updateDraftTemplateVersion(this.#database, { organizationId: context.organizationId, templateId,
-      versionId, definition: input.definition as JsonValue,
-      assetRequirements: collectTemplateAssetRequirements(input.definition) });
+    const outcome = await runAuditedTransaction(this.#database, async (transaction) => {
+      const result = await updateDraftTemplateVersionInTransaction(transaction, {
+        organizationId: context.organizationId,
+        templateId,
+        versionId,
+        definition: input.definition as JsonValue,
+        assetRequirements: collectTemplateAssetRequirements(input.definition)
+      });
+      return {
+        result,
+        audit: result === "UPDATED"
+          ? this.#auditRecord(context, "TEMPLATE_VERSION_UPDATED", "template_version", versionId, requestId)
+          : null
+      };
+    });
     if (outcome === "NOT_FOUND") return notFound();
     if (outcome === "INVALID_ASSET") return validationFailed();
-    await this.#writeAudit(context, "TEMPLATE_VERSION_UPDATED", "template_version", versionId, requestId);
     return this.getVersion(context.organizationId, templateId, versionId);
   }
 
   async deleteVersion(context: TenantAuthorizationContext, templateId: string, versionId: string, requestId: string) {
-    if (!await deleteDraftTemplateVersion(this.#database, context.organizationId, templateId, versionId)) return notFound();
-    await this.#writeAudit(context, "TEMPLATE_VERSION_DELETED", "template_version", versionId, requestId);
+    const deleted = await runAuditedTransaction(this.#database, async (transaction) => {
+      const result = await deleteDraftTemplateVersionInTransaction(
+        transaction, context.organizationId, templateId, versionId
+      );
+      return {
+        result,
+        audit: result
+          ? this.#auditRecord(context, "TEMPLATE_VERSION_DELETED", "template_version", versionId, requestId)
+          : null
+      };
+    });
+    if (!deleted) return notFound();
     return { deleted: true as const };
   }
 
@@ -166,29 +212,49 @@ export class PhaseFourService {
   }
 
   async publishVersion(context: TenantAuthorizationContext, templateId: string, versionId: string, requestId: string) {
-    const outcome = await publishTemplateVersion(this.#database, { organizationId: context.organizationId, templateId, versionId,
-      validateDefinition: (definition, assets) => {
-        const parsed = TemplateDefinitionSchema.safeParse(definition);
-        if (!parsed.success) return false;
-        const requirements = collectTemplateAssetRequirements(parsed.data);
-        return requirements.length === assets.length && requirements.every((requirement, index) => {
-          const asset = assets[index];
-          if (asset?.id !== requirement.id) return false;
-          return requirement.kind === "IMAGE" ? asset.detectedMimeType === "image/png" || asset.detectedMimeType === "image/jpeg"
-            : asset.detectedMimeType === "font/ttf" || asset.detectedMimeType === "font/otf";
-        });
-      } });
+    const outcome = await runAuditedTransaction(this.#database, async (transaction) => {
+      const result = await publishTemplateVersionInTransaction(transaction, {
+        organizationId: context.organizationId,
+        templateId,
+        versionId,
+        validateDefinition: (definition, assets) => {
+          const parsed = TemplateDefinitionSchema.safeParse(definition);
+          if (!parsed.success) return false;
+          const requirements = collectTemplateAssetRequirements(parsed.data);
+          return requirements.length === assets.length && requirements.every((requirement, index) => {
+            const asset = assets[index];
+            if (asset?.id !== requirement.id) return false;
+            return requirement.kind === "IMAGE" ? asset.detectedMimeType === "image/png" || asset.detectedMimeType === "image/jpeg"
+              : asset.detectedMimeType === "font/ttf" || asset.detectedMimeType === "font/otf";
+          });
+        }
+      });
+      return {
+        result,
+        audit: result === "PUBLISHED"
+          ? this.#auditRecord(context, "TEMPLATE_VERSION_PUBLISHED", "template_version", versionId, requestId)
+          : null
+      };
+    });
     if (outcome === "NOT_FOUND") return notFound();
     if (outcome === "INVALID_STATE") return conflict();
     if (outcome === "VALIDATION_FAILED") return validationFailed();
-    await this.#writeAudit(context, "TEMPLATE_VERSION_PUBLISHED", "template_version", versionId, requestId);
     return this.getVersion(context.organizationId, templateId, versionId);
   }
 
   async archiveVersion(context: TenantAuthorizationContext, templateId: string, versionId: string, requestId: string) {
-    const row = await archivePublishedTemplateVersion(this.#database, context.organizationId, templateId, versionId);
-    if (row === undefined) return conflict();
-    await this.#writeAudit(context, "TEMPLATE_VERSION_ARCHIVED", "template_version", versionId, requestId);
+    const archived = await runAuditedTransaction(this.#database, async (transaction) => {
+      const row = await archivePublishedTemplateVersionInTransaction(
+        transaction, context.organizationId, templateId, versionId
+      );
+      return {
+        result: row !== undefined,
+        audit: row === undefined
+          ? null
+          : this.#auditRecord(context, "TEMPLATE_VERSION_ARCHIVED", "template_version", versionId, requestId)
+      };
+    });
+    if (!archived) return conflict();
     return this.getVersion(context.organizationId, templateId, versionId);
   }
 
@@ -196,25 +262,44 @@ export class PhaseFourService {
     filename: string; declaredMimeType: string; bytes: Uint8Array;
   }, requestId: string): Promise<TemplateAsset> {
     if (context.actorMembershipId === null) throw new ApplicationError("FORBIDDEN", "The requested operation is not permitted.", 403);
+    const actorMembershipId = context.actorMembershipId;
     const validated = await validateTemplateAssetUpload(input);
     const id = randomUUID();
     const contentSha256 = createHash("sha256").update(input.bytes).digest();
     const extension = validated.detectedMimeType === "image/png" ? "png" : validated.detectedMimeType === "image/jpeg" ? "jpg"
       : validated.detectedMimeType === "font/ttf" ? "ttf" : "otf";
     const storageKey = `template-assets/${context.organizationId}/${templateId}/${id}/${randomUUID()}.${extension}`;
-    await this.#storage.put({ key: storageKey, body: input.bytes, contentType: validated.detectedMimeType,
-      contentSha256Hex: contentSha256.toString("hex") });
+    await armStorageCleanup(this.#database, {
+      organizationId: context.organizationId,
+      objectKey: storageKey,
+      notBefore: new Date(Date.now() + 30 * 60 * 1_000)
+    });
     try {
-      const row = await createTemplateAsset(this.#database, { id, organizationId: context.organizationId, templateId, storageKey,
-        originalFilename: validated.originalFilename, contentSha256, detectedMimeType: validated.detectedMimeType,
-        sizeBytes: input.bytes.byteLength, widthPx: validated.widthPx, heightPx: validated.heightPx,
-        membershipId: context.actorMembershipId });
-      if (row === undefined) { await this.#storage.delete(storageKey).catch(() => undefined); return notFound(); }
-      const asset = mapAsset(row);
-      await this.#writeAudit(context, "TEMPLATE_ASSET_CREATED", "template_asset", asset.id, requestId);
-      return asset;
+      await this.#storage.put({ key: storageKey, body: input.bytes, contentType: validated.detectedMimeType,
+        contentSha256Hex: contentSha256.toString("hex") });
+      const asset = await runAuditedTransaction(this.#database, async (transaction) => {
+        const row = await createTemplateAssetInTransaction(transaction, {
+          id, organizationId: context.organizationId, templateId, storageKey,
+          originalFilename: validated.originalFilename, contentSha256, detectedMimeType: validated.detectedMimeType,
+          sizeBytes: input.bytes.byteLength, widthPx: validated.widthPx, heightPx: validated.heightPx,
+          membershipId: actorMembershipId
+        });
+        if (row === undefined) return { result: undefined, audit: null };
+        await cancelStorageCleanupInTransaction(transaction, context.organizationId, storageKey);
+        const created = mapAsset(row);
+        return {
+          result: created,
+          audit: this.#auditRecord(context, "TEMPLATE_ASSET_CREATED", "template_asset", created.id, requestId)
+        };
+      });
+      return asset === undefined ? notFound() : asset;
     } catch (error) {
-      await this.#storage.delete(storageKey).catch(() => undefined);
+      try {
+        await this.#storage.delete(storageKey);
+        await completeStorageCleanupByKey(this.#database, context.organizationId, storageKey);
+      } catch {
+        // The pre-armed cleanup intent remains durable for the worker reconciler.
+      }
       throw error;
     }
   }
@@ -226,11 +311,16 @@ export class PhaseFourService {
 
   async archiveAsset(context: TenantAuthorizationContext, templateId: string, assetId: string, requestId: string) {
     try {
-      const row = await archiveTemplateAsset(this.#database, context.organizationId, templateId, assetId);
-      if (row === undefined) return notFound();
-      const asset = mapAsset(row);
-      await this.#writeAudit(context, "TEMPLATE_ASSET_ARCHIVED", "template_asset", asset.id, requestId);
-      return asset;
+      const asset = await runAuditedTransaction(this.#database, async (transaction) => {
+        const row = await archiveTemplateAssetInTransaction(transaction, context.organizationId, templateId, assetId);
+        if (row === undefined) return { result: undefined, audit: null };
+        const archived = mapAsset(row);
+        return {
+          result: archived,
+          audit: this.#auditRecord(context, "TEMPLATE_ASSET_ARCHIVED", "template_asset", archived.id, requestId)
+        };
+      });
+      return asset === undefined ? notFound() : asset;
     } catch (error) {
       if (isIntegrityViolation(error)) return conflict();
       throw error;
@@ -242,9 +332,19 @@ export class PhaseFourService {
     return row === undefined ? notFound() : mapAsset(row);
   }
 
-  async #writeAudit(context: TenantAuthorizationContext, action: AuditAction,
-    resourceType: "template" | "template_version" | "template_asset", resourceId: string, requestId: string) {
-    await this.#audit.write({ organizationId: context.organizationId, actorUserId: context.actorUserId,
-      actorMembershipId: context.actorMembershipId, action, resourceType, resourceId, requestId, metadata: null });
+  #auditRecord(context: TenantAuthorizationContext, action: AuditAction,
+    resourceType: "template" | "template_version" | "template_asset",
+    resourceId: string, requestId: string): NewAuditRecord {
+    return {
+      organizationId: context.organizationId,
+      actorUserId: context.actorUserId,
+      actorMembershipId: context.actorMembershipId,
+      action,
+      resourceType,
+      resourceId,
+      requestId,
+      metadata: null
+    };
   }
+
 }

@@ -205,3 +205,94 @@ Consequences:
 - Redis unavailability fails authenticated operations safely according to the documented availability policy.
 - Bcrypt inputs are validated against its 72-byte boundary.
 - Public verification/download endpoints remain accountless and do not use admin CSRF/session authorization.
+
+## ADR-016: Immutable Certificate Issuance Snapshot and Lifecycle
+
+Status: Accepted
+
+Decision:
+
+Before Phase 5 rendering is implemented:
+
+- create certificates only as revision-1 drafts
+- freeze certificate identity after creation
+- capture one immutable issuance-time snapshot containing the human-readable binding values sourced from participant/project/training data
+- render historical/regenerated PDFs from that snapshot rather than mutable live business rows
+- enforce the initial lifecycle as `DRAFT → GENERATING → AVAILABLE → REVOKED`, with revocation terminal
+- require a succeeded generation item before publishing a PDF revision
+- keep an available certificate available during regeneration and atomically publish only the next revision
+- reject same-revision PDF replacement, revision rollback/skip and immutable generation-job mutation
+
+`ISSUED` and `ARCHIVED` remain reserved certificate enum values until a later reviewed ADR/migration defines their lifecycle semantics.
+
+Reason:
+
+Participant, project and training records remain legitimately editable after issuance. Re-reading those live rows during regeneration or public verification would silently change the historical meaning of an existing certificate. Likewise, an unrestricted lifecycle or same-revision PDF update could let a stale worker resurrect a revoked certificate or overwrite a newer PDF. The database therefore owns these integrity boundaries in addition to application-level compare-and-swap logic.
+
+Consequences:
+
+- Phase 5 must create the certificate and its issuance snapshot atomically before generation starts.
+- Phase 5 worker finalization must mark the generation item successful and publish the certificate revision in one controlled transaction.
+- Regeneration does not change the original issuance snapshot or `issued_at`.
+- A revoked certificate is never regenerated or transitioned back to an available state.
+- Later lifecycle expansion requires an explicit migration and ADR update rather than weakening the trigger in application code.
+
+## ADR-017: Exact Generation Target Set, Planned Issue Time and Explicit Reissue
+
+Status: Accepted
+
+Decision:
+
+Certificate-generation planning is a durable PostgreSQL transaction:
+
+- the client idempotency key is scoped by organization/job type and is bound to immutable generation request identity
+- generation detail stores `selection_mode`, a 32-byte SHA-256 fingerprint of the exact first-resolved participant set and the server-selected renderer revision
+- omitted `participant_ids` resolves `ALL_ELIGIBLE` once; workers and later retries never re-resolve a changed population
+- the transaction materializes certificate identity, one immutable issuance snapshot and one generation item for every selected participant before durable queue intent commits
+- the issuance snapshot includes the planned issue timestamp used by rendering and later copied exactly into `certificates.issued_at`
+- at most one non-revoked certificate may exist for one organization/training/participant
+- initial generation does not silently reissue historical certificates; a new identity after revocation requires an explicit reissue operation
+
+The renderer revision is intentionally stored separately from the client request fingerprint. Replaying an already-created request after a deployment returns the original job and renderer revision instead of changing its execution semantics.
+
+Reason:
+
+A batch request whose membership is resolved later by a worker is not idempotent: participant membership can change between API acceptance, retry and queue delivery. Likewise, selecting issue time during rendering changes certificate bindings across retries. Materializing the exact target set and planned issue time at first acceptance turns generation into durable work against immutable inputs. Separating initial issue from reissue avoids accidental duplicate certificate identities.
+
+Consequences:
+
+- Phase 5 job creation must compare existing idempotency-key semantics before creating any new certificate rows.
+- Explicit participant lists are unique/all-or-conflict; omitted lists resolve only currently eligible initial-issue targets.
+- A retry of an existing `ALL_ELIGIBLE` job returns the original job without re-resolving current participants.
+- Workers may not infer job membership from live training relationships.
+- Reissue requires a later explicit API contract and must create a fresh certificate number/public identifier while retaining revoked history.
+
+## ADR-018: Capability-Minimized Certificate Renderer Boundary
+
+Status: Accepted
+
+Decision:
+
+Create `packages/certificate-renderer` before Phase 5 PDF implementation. Its public boundary accepts only a strict versioned render input: normalized template data, immutable issuance binding values, renderer revision, a prepared verification URL and exactly referenced validated asset bytes with SHA-256 identity.
+
+The renderer package:
+
+- depends on the template engine/Zod validation boundary only
+- does not import database, storage, queue, auth or network infrastructure
+- never receives storage keys, signing keys or a token-signing service
+- revalidates exact asset membership/purpose/MIME/hash and an explicit aggregate byte budget
+- copies caller-owned asset bytes at the boundary
+- treats the verification URL as already-authorized data and never signs tokens itself
+
+The worker remains the trusted infrastructure adapter. It loads durable PostgreSQL state/private objects and later calls the verification-token service before invoking the renderer.
+
+Reason:
+
+PDF/template processing is an untrusted resource boundary. Passing rich worker/service objects into renderer code would unnecessarily grant database, S3, queue, filesystem or signing capabilities and make later isolation materially harder. A narrow serializable input also creates a deterministic seam for tests and future worker-thread/child-process isolation.
+
+Consequences:
+
+- Phase 5 PDFKit/qrcode implementation goes behind this package API rather than inside API/worker service code.
+- Same-process package separation is not called a sandbox; production resource/process isolation remains a separate hardening requirement.
+- Security tests fail if forbidden infrastructure dependencies are introduced into renderer source/package metadata.
+- Phase 6 token code must keep verification-token time/key selection stable for existing certificates; renderer regeneration consumes the resulting prepared URL only.

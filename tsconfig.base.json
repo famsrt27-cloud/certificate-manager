@@ -20,6 +20,7 @@
     "baseUrl": ".",
     "paths": {
       "@certificate-platform/auth": ["packages/auth/src/index.ts"],
+      "@certificate-platform/certificate-renderer": ["packages/certificate-renderer/src/index.ts"],
       "@certificate-platform/config": ["packages/config/src/index.ts"],
       "@certificate-platform/contracts": ["packages/contracts/src/index.ts"],
       "@certificate-platform/database": ["packages/database/src/index.ts"],

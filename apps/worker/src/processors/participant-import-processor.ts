@@ -46,10 +46,7 @@ export class ParticipantImportProcessor {
     }
 
     if (payload.operation === "VALIDATE") {
-      if (importJob.status === "AWAITING_CONFIRMATION" || importJob.status === "SUCCEEDED") {
-        await this.#storage.delete(importJob.sourceStorageKey);
-        return;
-      }
+      if (importJob.status === "AWAITING_CONFIRMATION" || importJob.status === "SUCCEEDED") return;
       if (importJob.status === "FAILED" || importJob.status === "DEAD_LETTER" || importJob.status === "CANCELLED") return;
       try {
         const bytes = await this.#storage.get(importJob.sourceStorageKey, this.#maximumBytes);
@@ -64,11 +61,9 @@ export class ParticipantImportProcessor {
           maximumUncompressedBytes: this.#maximumUncompressedBytes
         });
         await stageParticipantImportRows(this.#database, importJob, rows);
-        await this.#storage.delete(importJob.sourceStorageKey);
       } catch (error) {
         if (!(error instanceof ParticipantImportFileError)) throw error;
         await failParticipantImport(this.#database, importJob.organizationId, importJob.jobId, "FAILED", error.code);
-        await this.#storage.delete(importJob.sourceStorageKey).catch(() => undefined);
       }
       return;
     }
@@ -89,10 +84,12 @@ export class ParticipantImportProcessor {
 
   async handleFinalFailure(payload: ParticipantImportJobPayload): Promise<void> {
     const parsed = ParticipantImportJobPayloadSchema.parse(payload);
-    await failParticipantImport(this.#database, parsed.organization_id, parsed.job_id, "DEAD_LETTER", "IMPORT_PROCESSING_FAILED");
-    if (parsed.operation === "VALIDATE") {
-      const importJob = await findParticipantImport(this.#database, parsed.organization_id, parsed.job_id);
-      if (importJob !== undefined) await this.#storage.delete(importJob.sourceStorageKey).catch(() => undefined);
-    }
+    await failParticipantImport(
+      this.#database,
+      parsed.organization_id,
+      parsed.job_id,
+      "DEAD_LETTER",
+      "IMPORT_PROCESSING_FAILED"
+    );
   }
 }

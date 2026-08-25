@@ -19,5 +19,6 @@ export {
   type CreatedSession,
   type SessionConfiguration,
   type SessionRecord,
+  type SessionRedisStore,
   type SessionStoreOptions
 } from "./session-store.js";
