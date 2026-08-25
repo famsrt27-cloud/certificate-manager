@@ -25,6 +25,7 @@ export const registerErrorHandler = (app: FastifyInstance): void => {
   });
 
   app.setErrorHandler((error, request, reply) => {
+    const publicRequest = request.url.startsWith("/api/public/");
     if (error instanceof ApplicationError) {
       void reply
         .status(error.statusCode)
@@ -35,13 +36,21 @@ export const registerErrorHandler = (app: FastifyInstance): void => {
     if (isFastifyBadRequest(error)) {
       void reply
         .status(400)
-        .send(createErrorResponse("VALIDATION_FAILED", "The request could not be processed.", request.id));
+        .send(createErrorResponse(
+          publicRequest ? "PUBLIC_REQUEST_FAILED" : "VALIDATION_FAILED",
+          publicRequest ? "The request could not be completed." : "The request could not be processed.",
+          request.id
+        ));
       return;
     }
 
     request.log.error({ err: error, error_code: "INTERNAL_ERROR" }, "request failed");
     void reply
       .status(500)
-      .send(createErrorResponse("INTERNAL_ERROR", "The request could not be processed.", request.id));
+      .send(createErrorResponse(
+        publicRequest ? "PUBLIC_REQUEST_FAILED" : "INTERNAL_ERROR",
+        publicRequest ? "The request could not be completed." : "The request could not be processed.",
+        request.id
+      ));
   });
 };

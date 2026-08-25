@@ -14,6 +14,11 @@ export {
   type LoginRateLimitResult
 } from "./login-rate-limiter.js";
 export {
+  PublicVerificationRateLimiter,
+  type PublicVerificationRateLimitConfiguration,
+  type PublicVerificationRateLimitResult
+} from "./public-verification-rate-limiter.js";
+export {
   RedisSessionStore,
   type AuthRedisStore,
   type CreatedSession,

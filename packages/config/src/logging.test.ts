@@ -1,0 +1,13 @@
+import { describe, expect, it } from "vitest";
+
+import { createStructuredLoggerOptions } from "./logging.js";
+
+describe("structured logging privacy", () => {
+  it("redacts public verification tokens from request bodies", () => {
+    const options = createStructuredLoggerOptions("info");
+
+    expect(options.redact.paths).toContain("req.body.token");
+    expect(options.redact.paths).toContain("token");
+    expect(options.redact.censor).toBe("[REDACTED]");
+  });
+});

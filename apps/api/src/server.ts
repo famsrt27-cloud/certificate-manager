@@ -1,10 +1,11 @@
 import { loadApiEnvironment } from "@certificate-platform/config";
-import { LoginRateLimiter, RedisSessionStore, hashPassword } from "@certificate-platform/auth";
+import { LoginRateLimiter, PublicVerificationRateLimiter, RedisSessionStore, hashPassword } from "@certificate-platform/auth";
 import {
   checkDatabase,
   closeDatabase,
   createDatabase,
   findAuthenticationUser,
+  findPublicCertificateVerification,
   insertAuditRecord,
   loadEffectiveIdentity
 } from "@certificate-platform/database";
@@ -23,6 +24,7 @@ import { OrganizationAuthorizationService } from "./modules/auth/organization-au
 import { PhaseThreeService } from "./modules/phase-three/phase-three-service.js";
 import { PhaseFourService } from "./modules/phase-four/phase-four-service.js";
 import { PhaseFiveService } from "./modules/phase-five/phase-five-service.js";
+import { PublicVerificationService } from "./modules/phase-six/public-verification-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -93,6 +95,15 @@ const phaseThreeService = new PhaseThreeService({
 });
 const phaseFourService = new PhaseFourService({ database, storage, cursorSecret: environment.SESSION_SECRET });
 const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID });
+const publicVerificationService = new PublicVerificationService({
+  verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
+  repository: { findByPublicIdentifier: (publicIdentifier) => findPublicCertificateVerification(database, publicIdentifier) }
+});
+const publicVerificationRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_VERIFICATION_RATE_LIMIT_NETWORK_MAX
+});
 
 const app = buildApi({
   dependencies: {
@@ -117,7 +128,8 @@ const app = buildApi({
     service: phaseFourService,
     templateAssetMaxBytes: environment.TEMPLATE_ASSET_MAX_BYTES
   },
-  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService }
+  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService },
+  publicVerification: { service: publicVerificationService, rateLimiter: publicVerificationRateLimiter }
 });
 
 let stopping = false;

@@ -11,6 +11,7 @@ import { registerAdminAuthRoutes, type AdminAuthRouteOptions } from "./routes/ad
 import { registerAdminPhaseThreeRoutes, type AdminPhaseThreeRouteOptions } from "./routes/admin-phase-three.js";
 import { registerAdminPhaseFourRoutes, type AdminPhaseFourRouteOptions } from "./routes/admin-phase-four.js";
 import { registerAdminPhaseFiveRoutes, type AdminPhaseFiveRouteOptions } from "./routes/admin-phase-five.js";
+import { registerPublicVerificationRoutes, type PublicVerificationRouteOptions } from "./routes/public-verification.js";
 
 export interface BuildApiOptions {
   readonly dependencies: ReadinessDependencies;
@@ -21,6 +22,7 @@ export interface BuildApiOptions {
   readonly phaseThree?: AdminPhaseThreeRouteOptions;
   readonly phaseFour?: AdminPhaseFourRouteOptions;
   readonly phaseFive?: AdminPhaseFiveRouteOptions;
+  readonly publicVerification?: PublicVerificationRouteOptions;
 }
 
 export const buildApi = ({
@@ -31,7 +33,8 @@ export const buildApi = ({
   authentication,
   phaseThree,
   phaseFour,
-  phaseFive
+  phaseFive,
+  publicVerification
 }: BuildApiOptions): FastifyInstance => {
   const app = Fastify({
     genReqId: () => randomUUID(),
@@ -42,6 +45,12 @@ export const buildApi = ({
   app.addHook("onSend", async (request, reply, payload) => {
     void reply.header("x-request-id", request.id);
     return payload;
+  });
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.url.startsWith("/api/public/")) {
+      void reply.header("cache-control", "no-store");
+      void reply.header("x-robots-tag", "noindex, nofollow, noarchive");
+    }
   });
 
   registerErrorHandler(app);
@@ -59,5 +68,6 @@ export const buildApi = ({
   }
   if (phaseFour !== undefined) registerAdminPhaseFourRoutes(app, phaseFour);
   if (phaseFive !== undefined) registerAdminPhaseFiveRoutes(app, phaseFive);
+  if (publicVerification !== undefined) registerPublicVerificationRoutes(app, publicVerification);
   return app;
 };

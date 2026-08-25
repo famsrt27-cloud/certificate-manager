@@ -15,6 +15,7 @@ const infrastructure = {
   OBJECT_STORAGE_ACCESS_KEY: "synthetic-access-key",
   OBJECT_STORAGE_SECRET_KEY: "synthetic-storage-secret",
   VERIFICATION_PUBLIC_BASE_URL: "https://verify.example.invalid",
+  VERIFICATION_ACTIVE_KID: "test-key",
   VERIFICATION_SIGNING_KEYS_JSON: JSON.stringify({ "test-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" })
 };
 
@@ -32,6 +33,9 @@ describe("environment validation", () => {
     expect(environment.ADMIN_MFA_POLICY).toBe("DEFERRED_NON_PRODUCTION");
     expect(environment.PARTICIPANT_IMPORT_MAX_BYTES).toBe(5 * 1_024 * 1_024);
     expect(environment.OBJECT_STORAGE_CREATE_BUCKET).toBe(false);
+    expect(environment.PUBLIC_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.PUBLIC_VERIFICATION_RATE_LIMIT_NETWORK_MAX).toBe(30);
+    expect(environment.VERIFICATION_SIGNING_KEYS_JSON["test-key"]).toHaveLength(32);
   });
 
   it("applies worker and public web defaults", () => {
@@ -74,6 +78,21 @@ describe("environment validation", () => {
       ...infrastructure,
       SESSION_IDLE_TTL_SECONDS: "3600",
       SESSION_ABSOLUTE_TTL_SECONDS: "1800"
+    })).toThrow(EnvironmentValidationError);
+  });
+
+  it("rejects unknown active keys, duplicate kids, and weak verification keys", () => {
+    expect(() => loadApiEnvironment({ ...infrastructure, VERIFICATION_ACTIVE_KID: "removed-key" }))
+      .toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({ ...infrastructure, VERIFICATION_ACTIVE_KID: "toString" }))
+      .toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({
+      ...infrastructure,
+      VERIFICATION_SIGNING_KEYS_JSON: '{"test-key":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","test-key":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"}'
+    })).toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({
+      ...infrastructure,
+      VERIFICATION_SIGNING_KEYS_JSON: JSON.stringify({ "test-key": "d2Vhaw" })
     })).toThrow(EnvironmentValidationError);
   });
 });

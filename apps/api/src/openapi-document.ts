@@ -7,7 +7,8 @@ import {
   CreateTemplateRequestSchema, CreateTemplateVersionRequestSchema, DeleteDraftVersionResponseSchema,
   TemplateAssetListResponseSchema, TemplateAssetResponseSchema, TemplateListResponseSchema, TemplatePreviewResponseSchema,
   TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
-  UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema
+  UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema,
+  PublicVerificationRequestSchema, PublicVerificationResponseSchema
 } from "@certificate-platform/contracts";
 import { z } from "zod";
 
@@ -138,6 +139,9 @@ export const openApiDocument = {
     },
     "/api/admin/templates/{templateId}/assets/{assetId}/archive": {
       post: writeOperation("template:asset:create", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
-    }
+    },
+    "/api/public/verify": { post: { security: [], requestBody: jsonRequest(PublicVerificationRequestSchema),
+      responses: { ...response(200, PublicVerificationResponseSchema), ...response(400, ErrorResponseSchema),
+        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } }
   }
 } as const;

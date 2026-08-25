@@ -27,7 +27,11 @@ export {
   type CertificateLifecycleStatus
 } from "./certificate-generation-policy.js";
 export {
+  CERTIFICATE_VERIFICATION_TOKEN_MAX_BYTES,
+  InvalidCertificateVerificationTokenError,
   createCertificateVerificationToken,
   createCertificateVerificationUrl,
-  type CertificateVerificationTokenInput
+  verifyCertificateVerificationToken,
+  type CertificateVerificationTokenInput,
+  type VerifiedCertificateVerificationToken
 } from "./certificate-verification-token.js";
