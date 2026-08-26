@@ -74,12 +74,35 @@ describe("environment validation", () => {
     }
   });
 
-  it("rejects insecure production origins and invalid session expiry", () => {
+  it("keeps production HTTPS origins and MFA fail-closed", () => {
+    try {
+      loadApiEnvironment({
+        ...infrastructure,
+        NODE_ENV: "production",
+        ADMIN_ALLOWED_ORIGINS: "http://admin.example.invalid"
+      });
+      throw new Error("expected production environment validation to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EnvironmentValidationError);
+      expect((error as EnvironmentValidationError).issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "ADMIN_ALLOWED_ORIGINS", message: "must use HTTPS in production" }),
+        expect.objectContaining({
+          path: "ADMIN_MFA_POLICY",
+          message: "production admin authentication requires an approved MFA contract and implementation"
+        })
+      ]));
+    }
+
     expect(() => loadApiEnvironment({
       ...infrastructure,
       NODE_ENV: "production",
-      ADMIN_ALLOWED_ORIGINS: "http://admin.example.invalid"
-    })).toThrow(EnvironmentValidationError);
+      ADMIN_ALLOWED_ORIGINS: "https://admin.example.invalid"
+    })).toThrowError(expect.objectContaining({
+      issues: [expect.objectContaining({ path: "ADMIN_MFA_POLICY" })]
+    }));
+  });
+
+  it("rejects invalid session expiry", () => {
     expect(() => loadApiEnvironment({
       ...infrastructure,
       SESSION_IDLE_TTL_SECONDS: "3600",

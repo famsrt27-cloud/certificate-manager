@@ -56,6 +56,9 @@ jobs:
       - name: Security tests
         run: pnpm test:security
 
+      - name: Compose configuration
+        run: pnpm compose:config
+
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
