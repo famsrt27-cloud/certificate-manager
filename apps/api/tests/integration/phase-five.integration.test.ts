@@ -27,6 +27,7 @@ describe.skipIf(!enabled)("Phase Five generation API integration", () => {
   const versionId = randomUUID();
   const draftVersionId = randomUUID();
   const otherVersionId = randomUUID();
+  const otherParticipantId = randomUUID();
   const csrfToken = "c".repeat(43);
   let authenticated: AuthenticatedContext | null;
   let authorizedIdentity: EffectiveIdentity;
@@ -53,6 +54,10 @@ describe.skipIf(!enabled)("Phase Five generation API integration", () => {
       { id: otherTrainingId, organization_id: otherOrganizationId, project_id: otherProjectId, name: "Other Training", code: `P5O-${randomUUID()}` }
     ]).execute();
     participantId = await addParticipant();
+    await database.insertInto("participants").values({ id: otherParticipantId, organization_id: otherOrganizationId,
+      display_name: "Foreign Phase Five Recipient", external_reference: "FOREIGN-PRIVATE-REF" }).execute();
+    await database.insertInto("training_participants").values({ organization_id: otherOrganizationId,
+      training_id: otherTrainingId, participant_id: otherParticipantId, source_import_job_id: null }).execute();
     await database.insertInto("certificate_templates").values([
       { id: templateId, organization_id: organizationId, name: "Phase Five Template" },
       { id: otherTemplateId, organization_id: otherOrganizationId, name: "Other Phase Five Template" }
@@ -113,6 +118,9 @@ describe.skipIf(!enabled)("Phase Five generation API integration", () => {
   it("keeps training and template lookups tenant scoped", async () => {
     expect((await post(undefined, otherTrainingId).send({ template_version_id: versionId })).status).toBe(404);
     expect((await post().send({ template_version_id: otherVersionId, participant_ids: [participantId] })).status).toBe(409);
+    expect((await post().send({ template_version_id: versionId, participant_ids: [otherParticipantId] })).status).toBe(409);
+    expect(await database.selectFrom("certificates").select("id")
+      .where("participant_id", "=", otherParticipantId).execute()).toHaveLength(0);
   });
 
   it("plans through PostgreSQL/outbox and safely replays reordered IDs", async () => {

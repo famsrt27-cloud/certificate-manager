@@ -20,6 +20,10 @@ const sign = (header: unknown, payload: unknown, key = activeKey): string => {
   const signed = `${encode(header)}.${encode(payload)}`;
   return `${signed}.${createHmac("sha256", key).update(signed).digest("base64url")}`;
 };
+const signSegments = (header: string, payload: string, key = activeKey): string => {
+  const signed = `${header}.${payload}`;
+  return `${signed}.${createHmac("sha256", key).update(signed).digest("base64url")}`;
+};
 const validHeader = { alg: "HS256", kid: "active-key", typ: "CVT" };
 const validPayload = { v: 1, typ: "certificate-verification", pcid: publicIdentifier, iat: 1_777_248_000 };
 const expectInvalid = (token: string): void => {
@@ -62,6 +66,10 @@ describe("certificate verification token validation", () => {
   it("rejects malformed structure, encoding, JSON, duplicates, and oversized tokens", () => {
     for (const token of ["", "one.two", "one.two.three.four", "*.e30.signature", `${encode("not-object")}.${encode(validPayload)}.x`,
       `${Buffer.from('{"alg":"HS256","alg":"HS256","kid":"active-key","typ":"CVT"}').toString("base64url")}.${encode(validPayload)}.x`,
+      signSegments(encode(validHeader), Buffer.from(
+        '{"v":1,"typ":"certificate-verification","pcid":"0123456789abcdef0123456789abcdef","pcid":"0123456789abcdef0123456789abcdef","iat":1777248000}'
+      ).toString("base64url")),
+      `${encode(validHeader)}=.${encode(validPayload)}.signature`,
       "a".repeat(CERTIFICATE_VERIFICATION_TOKEN_MAX_BYTES + 1)]) expectInvalid(token);
   });
 
@@ -72,11 +80,14 @@ describe("certificate verification token validation", () => {
     [{ ...validPayload, iat: 1.5 }],
     [{ ...validPayload, iat: Number.MAX_SAFE_INTEGER }],
     [{ ...validPayload, typ: "certificate-download" }],
-    [{ ...validPayload, v: 2 }]
+    [{ ...validPayload, v: 2 }],
+    [{ ...validPayload, pcid: "00000000-0000-4000-8000-000000000001" }],
+    [{ ...validPayload, unexpected: true }]
   ])("rejects invalid payload claims", (payload) => expectInvalid(sign(validHeader, payload)));
 
   it.each([
     [{ ...validHeader, typ: "JWT" }],
-    [{ ...validHeader, kid: "bad kid" }]
+    [{ ...validHeader, kid: "bad kid" }],
+    [{ ...validHeader, kid: "" }]
   ])("rejects invalid protected header claims", (header) => expectInvalid(sign(header, validPayload)));
 });

@@ -333,9 +333,40 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(persisted.published_at).toBeNull();
   });
 
-  it("enforces tenant isolation even when the actor is a member of both tenants", async () => {
-    const response = await request(app.server).get(`/api/admin/templates/${templateId}`).set("x-organization-id", otherOrganizationId);
-    expect(response.status).toBe(404);
+  it("enforces nested template, version, and asset isolation even when the actor belongs to both tenants", async () => {
+    const foreignTemplate = await admin(request(app.server).post("/api/admin/templates"), otherOrganizationId)
+      .send({ name: "Foreign Secure Template" });
+    expect(foreignTemplate.status).toBe(201);
+    const foreignTemplateId = foreignTemplate.body.data.id as string;
+    const foreignAsset = await admin(request(app.server).post(`/api/admin/templates/${foreignTemplateId}/assets`), otherOrganizationId)
+      .attach("file", onePixelPng, { filename: "foreign-logo.png", contentType: "image/png" });
+    expect(foreignAsset.status).toBe(201);
+    const foreignVersion = await admin(request(app.server).post(`/api/admin/templates/${foreignTemplateId}/versions`), otherOrganizationId)
+      .send({ definition: { format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [] } });
+    expect(foreignVersion.status).toBe(201);
+
+    for (const path of [
+      `/api/admin/templates/${foreignTemplateId}`,
+      `/api/admin/templates/${foreignTemplateId}/versions/${foreignVersion.body.data.id}`,
+      `/api/admin/templates/${foreignTemplateId}/assets/${foreignAsset.body.data.id}`
+    ]) {
+      expect((await request(app.server).get(path).set("x-organization-id", organizationId)).status).toBe(404);
+    }
+    for (const path of [
+      `/api/admin/templates/${templateId}`,
+      `/api/admin/templates/${templateId}/versions/${versionId}`,
+      `/api/admin/templates/${templateId}/assets/${assetId}`
+    ]) {
+      expect((await request(app.server).get(path).set("x-organization-id", otherOrganizationId)).status).toBe(404);
+    }
+
+    const mutation = await admin(request(app.server).patch(`/api/admin/templates/${foreignTemplateId}`))
+      .send({ name: "Cross-tenant mutation" });
+    expect(mutation.status).toBe(404);
+    const unchanged = await request(app.server).get(`/api/admin/templates/${foreignTemplateId}`)
+      .set("x-organization-id", otherOrganizationId);
+    expect(unchanged.status).toBe(200);
+    expect(unchanged.body.data.name).toBe("Foreign Secure Template");
   });
 
   it("enforces published definition, asset-link, and asset-content immutability in PostgreSQL", async () => {

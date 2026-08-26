@@ -55,6 +55,7 @@ export interface AuthenticationServiceOptions {
   readonly audit: AuditWriter;
   readonly allowedOrigins: readonly string[];
   readonly dummyPasswordHash: string;
+  readonly passwordVerifier?: typeof verifyPassword;
 }
 
 export class AuthenticationService {
@@ -64,14 +65,17 @@ export class AuthenticationService {
   readonly #audit: AuditWriter;
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #dummyPasswordHash: string;
+  readonly #passwordVerifier: typeof verifyPassword;
 
-  constructor({ sessions, rateLimiter, identities, audit, allowedOrigins, dummyPasswordHash }: AuthenticationServiceOptions) {
+  constructor({ sessions, rateLimiter, identities, audit, allowedOrigins, dummyPasswordHash,
+    passwordVerifier = verifyPassword }: AuthenticationServiceOptions) {
     this.#sessions = sessions;
     this.#rateLimiter = rateLimiter;
     this.#identities = identities;
     this.#audit = audit;
     this.#allowedOrigins = new Set(allowedOrigins);
     this.#dummyPasswordHash = dummyPasswordHash;
+    this.#passwordVerifier = passwordVerifier;
   }
 
   async login(input: LoginRequest, context: LoginContext): Promise<{ sessionId: string; data: AuthenticationData }> {
@@ -83,7 +87,7 @@ export class AuthenticationService {
     }
 
     const user = await this.#identities.findByNormalizedEmail(input.email);
-    const passwordMatches = await verifyPassword(input.password, user?.passwordHash ?? this.#dummyPasswordHash);
+    const passwordMatches = await this.#passwordVerifier(input.password, user?.passwordHash ?? this.#dummyPasswordHash);
     if (!passwordMatches || user?.status !== "ACTIVE") {
       await this.#writeAuthenticationFailure(context.requestId, "INVALID_CREDENTIALS");
       throw new ApplicationError("AUTHENTICATION_FAILED", "Authentication failed.", 401);

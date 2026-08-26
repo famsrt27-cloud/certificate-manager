@@ -32,15 +32,17 @@ const userId = "00000000-0000-4000-8000-000000000001";
 const membershipId = "00000000-0000-4000-8000-000000000002";
 const organizationId = "00000000-0000-4000-8000-000000000003";
 let passwordHash = "";
+let dummyPasswordHash = "";
 
 beforeAll(async () => {
   passwordHash = await hashPassword("synthetic-password", 12);
+  dummyPasswordHash = await hashPassword("constant-dummy-password", 12);
 });
 
-const buildFixture = (accountMaximum = 5) => {
+const buildFixture = (accountMaximum = 5, passwordVerifier?: (password: string, hash: string) => Promise<boolean>) => {
   const redis = new MemoryAuthRedis();
   const auditEvents: AuditEvent[] = [];
-  let identity: EffectiveIdentity = {
+  let identity: EffectiveIdentity | null = {
     user: { id: userId, email: "admin@example.invalid" },
     systemRoles: [],
     memberships: [{
@@ -51,18 +53,21 @@ const buildFixture = (accountMaximum = 5) => {
       permissions: ["organization:read", "role:assign"]
     }]
   };
+  let userStatus: "ACTIVE" | "INACTIVE" | "ARCHIVED" = "ACTIVE";
   const identities: IdentityProvider = {
     findByNormalizedEmail: vi.fn(async (email: string) => email === "admin@example.invalid" ? {
       id: userId,
       email,
       passwordHash,
-      status: "ACTIVE" as const
+      status: userStatus
     } : null),
     loadEffectiveIdentity: vi.fn(async () => identity)
   };
+  let tokenCounter = 0;
   const sessions = new RedisSessionStore({
     redis,
-    configuration: { secret: "s".repeat(32), idleTtlSeconds: 1_800, absoluteTtlSeconds: 28_800 }
+    configuration: { secret: "s".repeat(32), idleTtlSeconds: 1_800, absoluteTtlSeconds: 28_800 },
+    randomToken: () => Buffer.alloc(32, ++tokenCounter).toString("base64url")
   });
   const service = new AuthenticationService({
     sessions,
@@ -75,7 +80,8 @@ const buildFixture = (accountMaximum = 5) => {
     identities,
     audit: { write: async (event) => { auditEvents.push(event); } },
     allowedOrigins: ["https://admin.example.invalid"],
-    dummyPasswordHash: passwordHash
+    dummyPasswordHash,
+    ...(passwordVerifier === undefined ? {} : { passwordVerifier })
   });
   const app = buildApi({
     dependencies: {
@@ -86,7 +92,9 @@ const buildFixture = (accountMaximum = 5) => {
     logger: false,
     authentication: { service, absoluteTtlSeconds: 28_800 }
   });
-  return { app, redis, auditEvents, identities, setIdentity: (value: EffectiveIdentity) => { identity = value; } };
+  return { app, redis, auditEvents, identities,
+    setIdentity: (value: EffectiveIdentity | null) => { identity = value; },
+    setUserStatus: (value: "ACTIVE" | "INACTIVE" | "ARCHIVED") => { userStatus = value; } };
 };
 
 const login = (app: ReturnType<typeof buildApi>, password = "synthetic-password", cookie?: string) => {
@@ -148,6 +156,26 @@ describe("admin authentication routes", () => {
     await fixture.app.close();
   });
 
+  it("performs password verification for unknown and inactive accounts without changing the generic response", async () => {
+    const passwordVerifier = vi.fn(async (_password: string, hash: string) => hash === passwordHash);
+    const fixture = buildFixture(5, passwordVerifier);
+    await fixture.app.ready();
+
+    const unknown = await request(fixture.app.server)
+      .post("/api/admin/auth/login")
+      .set("origin", "https://admin.example.invalid")
+      .send({ email: "unknown@example.invalid", password: "synthetic-password" });
+    fixture.setUserStatus("INACTIVE");
+    const inactive = await login(fixture.app);
+
+    expect(unknown.status).toBe(401);
+    expect(inactive.status).toBe(401);
+    expect(ErrorResponseSchema.parse(unknown.body).error).toEqual(ErrorResponseSchema.parse(inactive.body).error);
+    expect(passwordVerifier).toHaveBeenNthCalledWith(1, "synthetic-password", dummyPasswordHash);
+    expect(passwordVerifier).toHaveBeenNthCalledWith(2, "synthetic-password", passwordHash);
+    await fixture.app.close();
+  });
+
   it("enforces allowed Origin and distributed throttling before successful authentication", async () => {
     const fixture = buildFixture(1);
     await fixture.app.ready();
@@ -162,6 +190,40 @@ describe("admin authentication routes", () => {
     expect(first.status).toBe(401);
     expect(limited.status).toBe(429);
     expect(limited.headers["retry-after"]).toBe("900");
+    await fixture.app.close();
+  });
+
+  it.each([
+    undefined,
+    "https://admin.example.invalid.evil.invalid",
+    "https://sub.admin.example.invalid",
+    "http://admin.example.invalid",
+    "https://admin.example.invalid:444",
+    "https://admin.example.invalid/path"
+  ])("rejects missing or confused login Origin %s", async (origin) => {
+    const fixture = buildFixture();
+    await fixture.app.ready();
+    let operation = request(fixture.app.server).post("/api/admin/auth/login")
+      .send({ email: "admin@example.invalid", password: "synthetic-password" });
+    if (origin !== undefined) operation = operation.set("origin", origin);
+
+    expect((await operation).status).toBe(403);
+    expect(fixture.identities.findByNormalizedEmail).not.toHaveBeenCalled();
+    await fixture.app.close();
+  });
+
+  it("replaces a deterministic attacker-known stale session cookie on login", async () => {
+    const fixture = buildFixture();
+    await fixture.app.ready();
+    const attackerSession = "z".repeat(43);
+
+    const authenticated = await login(fixture.app, "synthetic-password",
+      `__Host-admin_session=${attackerSession}`);
+
+    expect(authenticated.status).toBe(200);
+    expect(cookiePair(authenticated)).not.toBe(`__Host-admin_session=${attackerSession}`);
+    expect((await request(fixture.app.server).get("/api/admin/auth/session")
+      .set("cookie", `__Host-admin_session=${attackerSession}`)).status).toBe(401);
     await fixture.app.close();
   });
 
@@ -215,6 +277,48 @@ describe("admin authentication routes", () => {
     await fixture.app.close();
   });
 
+  it("rejects malformed, random, cross-session, and wrong-Origin CSRF attempts before logout mutation", async () => {
+    const fixture = buildFixture();
+    await fixture.app.ready();
+    const first = await login(fixture.app);
+    const second = await login(fixture.app);
+    const firstBody = AuthenticationResponseSchema.parse(first.body);
+    const secondBody = AuthenticationResponseSchema.parse(second.body);
+    const firstCookie = cookiePair(first);
+    const attempts = [
+      { origin: "https://admin.example.invalid", token: "malformed" },
+      { origin: "https://admin.example.invalid", token: "r".repeat(43) },
+      { origin: "https://admin.example.invalid", token: secondBody.data.csrf_token },
+      { origin: "https://admin.example.invalid.evil.invalid", token: firstBody.data.csrf_token },
+      { origin: "http://admin.example.invalid", token: firstBody.data.csrf_token },
+      { origin: "https://admin.example.invalid:444", token: firstBody.data.csrf_token }
+    ];
+
+    for (const attempt of attempts) {
+      const response = await request(fixture.app.server).post("/api/admin/auth/logout")
+        .set("origin", attempt.origin).set("cookie", firstCookie).set("x-csrf-token", attempt.token);
+      expect(response.status).toBe(403);
+      expect((await request(fixture.app.server).get("/api/admin/auth/session").set("cookie", firstCookie)).status).toBe(200);
+    }
+    await fixture.app.close();
+  });
+
+  it("does not restore authority when a valid CSRF token is replayed after logout", async () => {
+    const fixture = buildFixture();
+    await fixture.app.ready();
+    const authenticated = await login(fixture.app);
+    const body = AuthenticationResponseSchema.parse(authenticated.body);
+    const cookie = cookiePair(authenticated);
+    const logout = () => request(fixture.app.server).post("/api/admin/auth/logout")
+      .set("origin", "https://admin.example.invalid").set("cookie", cookie)
+      .set("x-csrf-token", body.data.csrf_token);
+
+    expect((await logout()).status).toBe(200);
+    expect((await logout()).status).toBe(200);
+    expect((await request(fixture.app.server).get("/api/admin/auth/session").set("cookie", cookie)).status).toBe(401);
+    await fixture.app.close();
+  });
+
   it("revokes a stale session immediately after a server-side membership or role change", async () => {
     const fixture = buildFixture();
     await fixture.app.ready();
@@ -231,6 +335,21 @@ describe("admin authentication routes", () => {
     expect(response.status).toBe(401);
     expect(fixture.auditEvents.some((event) => event.action === "AUTH_SESSION_REVOKED"
       && event.metadata?.reason === "AUTHORIZATION_CHANGED")).toBe(true);
+    await fixture.app.close();
+  });
+
+  it("revokes a stale session when the server-side user becomes disabled", async () => {
+    const fixture = buildFixture();
+    await fixture.app.ready();
+    const authenticated = await login(fixture.app);
+    const cookie = cookiePair(authenticated);
+    fixture.setIdentity(null);
+
+    const response = await request(fixture.app.server).get("/api/admin/auth/session").set("cookie", cookie);
+
+    expect(response.status).toBe(401);
+    expect(fixture.auditEvents.some((event) => event.action === "AUTH_SESSION_REVOKED"
+      && event.metadata?.reason === "USER_INACTIVE")).toBe(true);
     await fixture.app.close();
   });
 
