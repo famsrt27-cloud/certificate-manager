@@ -11,9 +11,9 @@ export default defineConfig({
     trace: "on-first-retry"
   },
   webServer: process.env.E2E_EXTERNAL_SERVER === "true" ? undefined : {
-    command: process.platform === "win32"
-      ? "apps\\web\\node_modules\\.bin\\next.cmd dev apps/web --hostname 127.0.0.1 --port 3100"
-      : "apps/web/node_modules/.bin/next dev apps/web --hostname 127.0.0.1 --port 3100",
+    command: process.env.CI
+      ? "node apps/web/node_modules/next/dist/bin/next start apps/web --hostname 127.0.0.1 --port 3100"
+      : "node apps/web/node_modules/next/dist/bin/next dev apps/web --hostname 127.0.0.1 --port 3100",
     url: "http://127.0.0.1:3100",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000

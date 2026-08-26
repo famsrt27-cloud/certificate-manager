@@ -8,7 +8,7 @@ import {
   TemplateAssetListResponseSchema, TemplateAssetResponseSchema, TemplateListResponseSchema, TemplatePreviewResponseSchema,
   TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
   UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema,
-  PublicDownloadAuthorizationRequestSchema, PublicDownloadAuthorizationResponseSchema,
+  PublicCertificateDownloadRequestSchema, PublicDownloadAuthorizationRequestSchema, PublicDownloadAuthorizationResponseSchema,
   PublicVerificationRequestSchema, PublicVerificationResponseSchema
 } from "@certificate-platform/contracts";
 import { z } from "zod";
@@ -147,6 +147,22 @@ export const openApiDocument = {
     "/api/public/certificates/download-authorize": { post: { security: [],
       requestBody: jsonRequest(PublicDownloadAuthorizationRequestSchema),
       responses: { ...response(200, PublicDownloadAuthorizationResponseSchema), ...response(400, ErrorResponseSchema),
-        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } }
+        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } },
+    "/api/public/certificates/download": { post: { security: [],
+      requestBody: jsonRequest(PublicCertificateDownloadRequestSchema),
+      responses: {
+        "200": {
+          description: "Certificate PDF",
+          headers: {
+            "Content-Disposition": { schema: { type: "string" }, description: "Static certificate attachment filename" },
+            "Cache-Control": { schema: { type: "string" }, description: "private, no-store" },
+            "X-Content-Type-Options": { schema: { type: "string" }, description: "nosniff" },
+            "X-Request-ID": { schema: { type: "string", format: "uuid" } },
+            "X-Robots-Tag": { schema: { type: "string" }, description: "Public endpoint indexing policy" }
+          },
+          content: { "application/pdf": { schema: { type: "string", format: "binary" } } }
+        },
+        ...response(400, ErrorResponseSchema), ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema)
+      } } }
   }
 } as const;

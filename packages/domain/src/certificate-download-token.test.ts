@@ -59,6 +59,19 @@ describe("certificate download token", () => {
     expect(() => verifyCertificateDownloadToken(verification, keys)).toThrow(InvalidCertificateDownloadTokenError);
   });
 
+  it("enforces redemption time without clock skew and rejects the exact expiry boundary", async () => {
+    const { verifyCertificateDownloadTokenForRedemption } = await import("./certificate-download-token.js");
+    const token = createCertificateDownloadToken({ keyId: "active-key", key: activeKey, publicIdentifier,
+      issuedAt, ttlSeconds: 60, tokenId });
+    expect(verifyCertificateDownloadTokenForRedemption(token, keys, issuedAt).publicIdentifier).toBe(publicIdentifier);
+    expect(verifyCertificateDownloadTokenForRedemption(token, keys,
+      new Date(issuedAt.getTime() + 59_999)).publicIdentifier).toBe(publicIdentifier);
+    expect(() => verifyCertificateDownloadTokenForRedemption(token, keys,
+      new Date(issuedAt.getTime() + 60_000))).toThrow(InvalidCertificateDownloadTokenError);
+    expect(() => verifyCertificateDownloadTokenForRedemption(token, keys,
+      new Date(issuedAt.getTime() - 1_000))).toThrow(InvalidCertificateDownloadTokenError);
+  });
+
   it("generates a cryptographically random 128-bit token ID and binds it into the signature", () => {
     const generated = createCertificateDownloadToken({ keyId: "active-key", key: activeKey, publicIdentifier,
       issuedAt, ttlSeconds: 60 });

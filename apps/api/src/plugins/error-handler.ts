@@ -3,16 +3,16 @@ import type { FastifyInstance } from "fastify";
 
 import { ApplicationError } from "../errors/application-error.js";
 
-interface FastifyBadRequest {
+interface FastifyClientRequestError {
   readonly statusCode: number;
   readonly code: string;
 }
 
-const isFastifyBadRequest = (error: unknown): error is FastifyBadRequest =>
+const isFastifyClientRequestError = (error: unknown): error is FastifyClientRequestError =>
   typeof error === "object"
   && error !== null
   && "statusCode" in error
-  && error.statusCode === 400
+  && (error.statusCode === 400 || error.statusCode === 413)
   && "code" in error
   && typeof error.code === "string"
   && error.code.startsWith("FST_ERR_");
@@ -33,7 +33,7 @@ export const registerErrorHandler = (app: FastifyInstance): void => {
       return;
     }
 
-    if (isFastifyBadRequest(error)) {
+    if (isFastifyClientRequestError(error)) {
       void reply
         .status(400)
         .send(createErrorResponse(

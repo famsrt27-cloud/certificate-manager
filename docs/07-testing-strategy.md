@@ -101,3 +101,5 @@ Required suites include:
 - Phase 8: deployment smoke, backup and restore tests
 
 A phase is not complete while its critical security or data-integrity tests are failing.
+
+The Phase 6 completion gate provisions PostgreSQL, Redis and local S3-compatible private storage in CI. Its canonical secure-download integration path is not optional in CI and proves verification, download authorization, private-object redemption, revocation blocking and corrupt-object rejection.

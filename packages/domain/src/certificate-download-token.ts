@@ -104,18 +104,6 @@ export const verifyCertificateDownloadToken = (
   if (header.alg !== "HS256" || header.typ !== "CDT" || typeof header.kid !== "string"
     || !KEY_ID_PATTERN.test(header.kid)) return invalidToken();
   const payload = parseStrictObject(payloadSegment, ["v", "typ", "aud", "pcid", "iat", "exp", "jti"]);
-  if (payload.v !== 1 || payload.typ !== "certificate-download" || payload.aud !== "public-certificate-download"
-    || typeof payload.pcid !== "string" || payload.pcid.length > 128 || typeof payload.jti !== "string"
-    || !TOKEN_ID_PATTERN.test(payload.jti) || Buffer.from(payload.jti, "base64url").toString("base64url") !== payload.jti
-    || Buffer.from(payload.jti, "base64url").byteLength !== 16 || !Number.isSafeInteger(payload.iat)
-    || !Number.isSafeInteger(payload.exp)) {
-    return invalidToken();
-  }
-  const issuedAtSeconds = payload.iat as number;
-  const expiresAtSeconds = payload.exp as number;
-  if (issuedAtSeconds < 0 || issuedAtSeconds > MAX_TIMESTAMP_SECONDS || expiresAtSeconds <= issuedAtSeconds
-    || expiresAtSeconds > MAX_TIMESTAMP_SECONDS
-    || expiresAtSeconds - issuedAtSeconds > CERTIFICATE_DOWNLOAD_TOKEN_MAX_TTL_SECONDS) return invalidToken();
   const key = verificationKeys.get(header.kid);
   const signed = `${headerSegment}.${payloadSegment}`;
   const expectedSignature = createHmac("sha256", key ?? UNKNOWN_KEY).update(signed).digest();
@@ -124,6 +112,29 @@ export const verifyCertificateDownloadToken = (
   const signatureMatches = providedSignature.toString("base64url") === signatureSegment
     && providedSignature.byteLength === expectedSignature.byteLength
     && timingSafeEqual(providedSignature, expectedSignature);
-  if (key === undefined || !signatureMatches || !PUBLIC_IDENTIFIER_PATTERN.test(payload.pcid)) return invalidToken();
+  if (key === undefined || !signatureMatches) return invalidToken();
+  if (payload.v !== 1 || payload.typ !== "certificate-download" || payload.aud !== "public-certificate-download"
+    || typeof payload.pcid !== "string" || payload.pcid.length > 128 || typeof payload.jti !== "string"
+    || !TOKEN_ID_PATTERN.test(payload.jti) || Buffer.from(payload.jti, "base64url").toString("base64url") !== payload.jti
+    || Buffer.from(payload.jti, "base64url").byteLength !== 16 || !Number.isSafeInteger(payload.iat)
+    || !Number.isSafeInteger(payload.exp) || !PUBLIC_IDENTIFIER_PATTERN.test(payload.pcid)) return invalidToken();
+  const issuedAtSeconds = payload.iat as number;
+  const expiresAtSeconds = payload.exp as number;
+  if (issuedAtSeconds < 0 || issuedAtSeconds > MAX_TIMESTAMP_SECONDS || expiresAtSeconds <= issuedAtSeconds
+    || expiresAtSeconds > MAX_TIMESTAMP_SECONDS
+    || expiresAtSeconds - issuedAtSeconds > CERTIFICATE_DOWNLOAD_TOKEN_MAX_TTL_SECONDS) return invalidToken();
   return { publicIdentifier: payload.pcid, issuedAtSeconds, expiresAtSeconds, tokenId: payload.jti };
+};
+
+export const verifyCertificateDownloadTokenForRedemption = (
+  token: string,
+  verificationKeys: ReadonlyMap<string, Uint8Array>,
+  currentTime: Date,
+  maximumBytes = CERTIFICATE_DOWNLOAD_TOKEN_MAX_BYTES
+): VerifiedCertificateDownloadToken => {
+  const nowSeconds = Math.floor(currentTime.getTime() / 1_000);
+  if (!Number.isSafeInteger(nowSeconds) || nowSeconds < 0 || nowSeconds > MAX_TIMESTAMP_SECONDS) return invalidToken();
+  const verified = verifyCertificateDownloadToken(token, verificationKeys, maximumBytes);
+  if (verified.issuedAtSeconds > nowSeconds || nowSeconds >= verified.expiresAtSeconds) return invalidToken();
+  return verified;
 };

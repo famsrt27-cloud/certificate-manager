@@ -32,6 +32,7 @@ export {
   InvalidCertificateDownloadTokenError,
   createCertificateDownloadToken,
   verifyCertificateDownloadToken,
+  verifyCertificateDownloadTokenForRedemption,
   type CertificateDownloadTokenInput,
   type VerifiedCertificateDownloadToken
 } from "./certificate-download-token.js";

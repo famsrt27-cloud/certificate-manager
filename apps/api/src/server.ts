@@ -4,6 +4,7 @@ import {
   checkDatabase,
   closeDatabase,
   createDatabase,
+  findPublicCertificateDownload,
   findPublicCertificateDownloadAuthorization,
   findAuthenticationUser,
   findPublicCertificateVerification,
@@ -27,6 +28,7 @@ import { PhaseFourService } from "./modules/phase-four/phase-four-service.js";
 import { PhaseFiveService } from "./modules/phase-five/phase-five-service.js";
 import { PublicVerificationService } from "./modules/phase-six/public-verification-service.js";
 import { PublicDownloadAuthorizationService } from "./modules/phase-six/public-download-authorization-service.js";
+import { PublicCertificateDownloadService } from "./modules/phase-six/public-certificate-download-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -122,6 +124,19 @@ const publicDownloadAuthorizationRateLimiter = new PublicVerificationRateLimiter
   networkMaximum: environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX,
   keyPrefix: "public:download-authorize-rate:v1:"
 });
+const publicCertificateDownloadService = new PublicCertificateDownloadService({
+  verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
+  repository: { findByPublicIdentifier: (publicIdentifier) =>
+    findPublicCertificateDownload(database, publicIdentifier) },
+  storage,
+  maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
+});
+const publicCertificateDownloadRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:download-rate:v1:"
+});
 
 const app = buildApi({
   dependencies: {
@@ -149,7 +164,9 @@ const app = buildApi({
   phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService },
   publicVerification: { service: publicVerificationService, rateLimiter: publicVerificationRateLimiter },
   publicDownloadAuthorization: { service: publicDownloadAuthorizationService,
-    rateLimiter: publicDownloadAuthorizationRateLimiter }
+    rateLimiter: publicDownloadAuthorizationRateLimiter },
+  publicCertificateDownload: { service: publicCertificateDownloadService,
+    rateLimiter: publicCertificateDownloadRateLimiter }
 });
 
 let stopping = false;

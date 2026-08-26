@@ -15,6 +15,15 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
   poweredByHeader: false,
   reactStrictMode: true,
+  headers: () => [{
+    source: "/verify",
+    headers: [
+      { key: "Cache-Control", value: "no-store" },
+      { key: "Referrer-Policy", value: "no-referrer" },
+      { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+      { key: "X-Content-Type-Options", value: "nosniff" }
+    ]
+  }],
   rewrites: () => [{
     source: "/api/:path*",
     destination: `${apiInternalBaseUrl}/api/:path*`

@@ -11,6 +11,7 @@ describe("structured logging privacy", () => {
     expect(options.redact.paths).toContain("req.body.download_token");
     expect(options.redact.paths).toContain("download_token");
     expect(options.redact.paths).toContain("downloadToken");
+    expect(options.redact.paths).toContain("storageKey");
     expect(options.redact.censor).toBe("[REDACTED]");
   });
 });

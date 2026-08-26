@@ -14,7 +14,7 @@
     "lint": "eslint apps packages tests *.ts *.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "vitest run",
-    "test:security": "vitest run packages/auth packages/certificate-renderer packages/domain packages/queue packages/storage packages/template-engine tests/security apps/api/src/routes/admin-auth.test.ts apps/api/src/modules/phase-three apps/api/src/modules/phase-four apps/api/src/modules/phase-six apps/worker/src/processors/participant-import-parser.test.ts",
+    "test:security": "vitest run packages/auth packages/certificate-renderer packages/domain packages/queue packages/storage packages/template-engine tests/security apps/api/src/routes/admin-auth.test.ts apps/api/src/routes/public-certificate-download.test.ts apps/api/src/modules/phase-three apps/api/src/modules/phase-four apps/api/src/modules/phase-six apps/worker/src/processors/participant-import-parser.test.ts",
     "test:integration": "vitest run --no-file-parallelism apps/api/tests/integration apps/worker/tests/integration",
     "test:watch": "vitest",
     "test:e2e": "playwright test",

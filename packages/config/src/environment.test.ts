@@ -38,6 +38,9 @@ describe("environment validation", () => {
     expect(environment.PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS).toBe(60);
     expect(environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
     expect(environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX).toBe(10);
+    expect(environment.PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX).toBe(10);
+    expect(environment.CERTIFICATE_PDF_MAX_BYTES).toBe(10 * 1_024 * 1_024);
     expect(environment.VERIFICATION_SIGNING_KEYS_JSON["test-key"]).toHaveLength(32);
   });
 
@@ -108,5 +111,11 @@ describe("environment validation", () => {
       PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS: "9" })).toThrow(EnvironmentValidationError);
     expect(() => loadApiEnvironment({ ...infrastructure,
       PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX: "0" })).toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({ ...infrastructure,
+      PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS: "9" })).toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({ ...infrastructure,
+      PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX: "0" })).toThrow(EnvironmentValidationError);
+    expect(() => loadApiEnvironment({ ...infrastructure, CERTIFICATE_PDF_MAX_BYTES: "1023" }))
+      .toThrow(EnvironmentValidationError);
   });
 });

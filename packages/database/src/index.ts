@@ -17,5 +17,6 @@ export * from "./certificate-generation-execution-repository.js";
 export * from "./queue-outbox-repository.js";
 export * from "./storage-cleanup-repository.js";
 export * from "./public-download-authorization-repository.js";
+export * from "./public-certificate-download-repository.js";
 export * from "./public-verification-repository.js";
 export type * from "./types.js";

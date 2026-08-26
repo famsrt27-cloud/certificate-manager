@@ -117,6 +117,8 @@ The canonical public flow is application-controlled streaming:
 2. Issue a signed, audience-scoped download token valid for at most 60 seconds.
 3. Redeem the token by POST through the application.
 4. Recheck token expiry/audience and current `AVAILABLE` state.
-5. Validate stored PDF metadata and stream the private object.
+5. Validate stored PDF metadata, retrieve no more than the configured PDF byte limit and validate the complete object before returning any bytes.
+6. Require the `%PDF-` signature, exact persisted byte length and exact persisted SHA-256.
+7. Recheck that status and publication identity are unchanged immediately before returning the PDF.
 
-Do not expose storage keys, internal UUIDs or permanent object URLs. A certificate revoked between steps 2 and 3 must not download.
+The Phase 6 MVP buffers the bounded object so integrity is known before the response body begins; it does not stream unverified bytes. Do not expose storage keys, internal UUIDs or permanent object URLs. A certificate revoked after authorization or while redemption retrieves the object must not download, and a publication changed during retrieval must fail rather than return stale bytes.
