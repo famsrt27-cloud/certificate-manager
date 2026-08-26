@@ -1,6 +1,6 @@
 # Repository Threat Model
 
-Status: Phase 7 Milestone 1 baseline, 2026-08-26
+Status: Phase 7 Milestones 1-2 security baseline, 2026-08-26. Milestone 3 remains deferred.
 
 This is the canonical, source-backed threat model for the implemented repository. It describes deployed code boundaries and documented contracts rather than a generic checklist. `docs/23-threat-model.md` remains the earlier architectural summary; this document adds the route, control, and test-level evidence required by Phase 7.
 
@@ -20,7 +20,7 @@ The modeled system consists of:
 - admin authentication, browser session, CSRF, and organization authorization flows (`apps/api/src/modules/auth`, `apps/web/src`); and
 - public verification, download authorization, and download redemption (`apps/api/src/modules/phase-six`, `apps/api/src/routes/public-*`).
 
-Dedicated malicious upload, template, renderer, and PDF corpus expansion is Phase 7 Milestone 2. The final leakage, broad resource-abuse, and completion sweep is Milestone 3.
+The dedicated malicious upload, template, renderer, and PDF corpus expansion is covered by Phase 7 Milestone 2. The final leakage, broad resource-abuse, and completion sweep remains Milestone 3.
 
 ## Security assets
 
@@ -48,7 +48,7 @@ Dedicated malicious upload, template, renderer, and PDF corpus expansion is Phas
 - **Administrator in another organization.** Has legitimate authority in organization B and may know UUIDs belonging to organization A. Knowledge of an internal identifier is not authority.
 - **Public verification-token holder.** May verify the certificate state permitted by the public contract and request a download capability when the certificate is currently downloadable. The token grants no administrative or raw storage access.
 - **Expired or stolen download-token holder.** Can replay or tamper with a bearer token, but cannot extend its authenticated lifetime or use it after certificate state/publication changes.
-- **Malicious participant-import or template-content supplier.** Can supply supported import or template inputs through an authorized organization workflow. Full content corpus testing is deferred to Milestone 2; no filesystem, network, database, queue, authentication, storage, or signing capability is granted to the renderer.
+- **Malicious participant-import or template-content supplier.** Can supply supported import or template inputs through an authorized organization workflow. M2 proves bounded CSV records/rows, bounded and pre-inspected OOXML, strict template/binding data, validated private asset bytes, and a capability-minimized renderer with no filesystem, network, database, queue, authentication, storage, or signing capability.
 - **Resource-exhaustion attacker.** Can send bursts, oversized public bodies, malformed tokens, and repeated authentication attempts. They cannot choose trusted proxy metadata under the current Fastify configuration.
 
 No profile assumes shell access, database credentials, Redis credentials, storage credentials, production secrets, or a compromised trusted administrator unless a separate deployment threat explicitly grants it.
@@ -115,6 +115,12 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 14. Public rate-limit increments and expiry assignment are one Redis Lua operation shared by API instances. With `trustProxy` unset, attacker-supplied forwarding headers do not change `request.ip`.
 15. Passwords, session IDs, CSRF tokens, verification/download tokens, signing/HMAC keys, and raw `jti` values are redacted and are not intentionally serialized in application errors.
 16. Public verification tokens are carried in the initial URL fragment only, then in an in-memory JSON POST. Download tokens remain in memory and are never placed in a path, query, cookie, local storage, session storage, or link target.
+17. Participant-import bytes are bounded by multipart and private-storage reads. CSV UTF-8, record size and row count are bounded while parsing; XLSX entry count, individual/cumulative expansion, normalized paths, duplicate paths and sparse worksheet coordinates are checked before ExcelJS materializes the workbook.
+18. Participant XLSX rejects encrypted archives, multiple worksheets, external relationship targets, external-link/macro/embedding/OLE parts and formula/object values. OOXML validation does not fetch a relationship target.
+19. Template asset uploads are raw-byte bounded before storage, use server-generated object keys, allow only PNG/JPEG/TTF/OTF, and recheck declared MIME, signature, raster container/dimensions/pixels and bounded SFNT structure.
+20. Template definitions reject unknown and prototype-sensitive keys, dynamic binding paths and infrastructure/resource fields. Suspicious literal text remains literal; definitions cannot express image/font URLs or local paths.
+21. Render inputs are strict and versioned, accept exactly purpose-compatible/hash-matched copied assets within an aggregate budget, and accept only credential-free/query-free absolute HTTP(S) verification URLs within qrcode's guaranteed byte-mode capacity. The URL is QR data, never a fetch target.
+22. PDF output is capped incrementally while PDFKit emits chunks. Renderer errors destroy/settle the stream, return no partial accepted PDF, and worker/database publication guards keep failed output from `AVAILABLE` and on durable storage cleanup paths.
 
 ## Threat scenarios
 
@@ -137,6 +143,14 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 | Distributed rate-limit race | Concurrent burst split across limiter/API instances | Atomic Redis Lua `INCR`/`EXPIRE`; real-Redis integration asserts exact allowed count | Limit cannot be materially raced |
 | Oversized public verify body | Large JSON is parsed before route limiter | Per-route 4 KiB Fastify `bodyLimit`; regression asserts limiter/repository are not called | Rejected before route work |
 | Capability leakage in logs | Cause errors with sensitive fields | Pino redaction paths and public response/log tests | Values redacted; broader audit continues in M3 |
+| Malicious CSV | Invalid UTF-8/NUL, malformed quotes/delimiters, duplicate/unknown headers, oversized record, row overflow and formula-looking literals | API UTF-8/signature boundary plus parser-time 4 KiB record and configured row caps; bounded table-driven corpus | Invalid content fails deterministically; formula-looking text remains literal because no spreadsheet export sink exists |
+| XLSX decompression/path abuse | Encrypted/truncated ZIP, excess entries/expanded bytes, duplicate/absolute/traversal paths and sparse extreme coordinates | Lazy yauzl pre-inspection before ExcelJS; normalized path uniqueness; per-entry/cumulative/row/column limits | Rejected before workbook materialization without a decompression-bomb fixture |
+| OOXML active/external content | External relationships/hyperlinks, external links, macros, embeddings and OLE parts | Relationship XML and content-type inspection plus forbidden-part checks; formula/object cell validation | Rejected; no network client or fetch occurs |
+| Template asset confusion | MIME/signature mismatch, truncated/animated raster, oversized dimensions/pixels, WOFF/TTC/fake or malformed SFNT | Multipart raw-byte cap, PNG/JPEG container and Sharp metadata profile, bounded SFNT directory, purpose/MIME checks again at render | Rejected or contained at the controlled downstream font/image parser boundary |
+| Template/binding injection | Unknown/prototype keys, dynamic property paths, expression/XSS/SSRF/path strings | Strict versioned Zod objects, iterative prototype-key precheck, enum binding resolver and asset UUID references only | Expressions are never evaluated; safe suspicious literals remain data |
+| Renderer capability expansion | Add database/Redis/BullMQ/S3/auth/signing/filesystem/network/process/eval capability | Source/dependency boundary test and strict render schema | Build/test fails; renderer retains only PDFKit/qrcode/template-engine/Zod capabilities |
+| Render/PDF resource abuse | Maximum elements/text/assets, impossible QR payload, PDF output beyond budget, malformed image/font | Schema/binder/asset caps, 2,331-byte QR URL cap, incremental PDF stream cap and controlled parser-error tests | Fails boundedly with no partial accepted PDF |
+| Worker publication after renderer failure | Bad render input/output, asset substitution or publication failure | Hash/size/signature rechecks, PostgreSQL item/lifecycle guards and durable cleanup outbox integration | Certificate is not published `AVAILABLE`; current valid publication is not replaced |
 
 ## Existing mitigations
 
@@ -148,13 +162,19 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 - Distributed public rate limits: `packages/auth/src/public-verification-rate-limiter.ts`, `apps/api/src/infrastructure/auth-redis-store.ts`, and `apps/api/tests/integration/public-rate-limit-abuse.integration.test.ts`.
 - Public browser transport: `tests/e2e/phase-six.spec.ts`.
 - Renderer capability restriction: `tests/security/certificate-renderer-boundary.test.ts`.
+- Malicious CSV/XLSX, ZIP/OOXML and cell-value corpus: `apps/worker/src/processors/participant-import-parser.test.ts`; terminal cleanup proof: `apps/worker/tests/integration/participant-import.integration.test.ts`.
+- Participant/template upload byte and server-generated-key boundaries: `apps/api/tests/integration/phase-three.integration.test.ts`, `apps/api/tests/integration/phase-four.integration.test.ts`, and their module-local upload tests.
+- Image/font validation and controlled downstream malformed-font behavior: `apps/api/src/modules/phase-four/template-asset-upload.test.ts` and `packages/certificate-renderer/src/render.test.ts`.
+- Strict template/binder/prototype/literal coverage: `packages/template-engine/src/template-definition.test.ts` and `packages/template-engine/src/data-binder.test.ts`.
+- Strict renderer input, asset identity/budget, QR and incremental PDF behavior: `packages/certificate-renderer/src/render-input.test.ts` and `packages/certificate-renderer/src/render.test.ts`.
+- Renderer failure/publication containment: `apps/worker/tests/integration/certificate-generation.integration.test.ts`.
 - Structured redaction: `packages/config/src/logging.ts` and `packages/config/src/logging.test.ts`.
 - Database constraints, immutable issuance inputs, revocation, and stale-generation protections: `docs/09-postgresql-schema.sql`, database migration tests, and certificate integrity/generation integration tests.
 
 ## Required Phase 7 tests
 
 - **Milestone 1:** access-control/IDOR, role confusion, session lifecycle/fixation/revocation, CSRF/Origin, password and login behavior, Redis fail-closed behavior, public capability parsing/type/state/error abuse, proxy-header behavior, distributed rate-limit atomicity, and targeted capability redaction.
-- **Milestone 2:** malicious CSV/XLSX and OOXML relationships, image/font metadata, template injection/XSS/SSRF/path traversal, renderer resource exhaustion, and adversarial PDF inputs. Existing boundary tests remain required in M1 but dedicated expansion is deferred.
+- **Milestone 2:** malicious CSV/XLSX and OOXML relationships, image/font metadata, template injection/XSS/SSRF/path traversal, renderer resource exhaustion, and adversarial PDF inputs are covered by the source-backed tests listed above.
 - **Milestone 3:** final full-repository sweep, complete secret/PII leakage review, broad resource-abuse limits, and the Phase 7 completion gate.
 - **Phase 8 deployment validation:** explicit reverse-proxy trust/CIDR configuration, production TLS and secure-cookie termination, managed secret/key operations, network policies, process isolation, production object-store policy, monitoring, backups, and incident runbooks.
 
@@ -187,7 +207,14 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 | Untrusted forwarding-header bypass | Default Fastify configuration | Explicit header abuse route test added; production proxy model remains deployment work | M1 / Phase 8 | COVERED |
 | Public token browser transport | Phase 6 Playwright security coverage | None unless browser implementation changes | M1 | COVERED |
 | M1 capability log redaction | Existing Pino redaction tests | Verification token, signing/HMAC key, and raw `jti` paths added | M1 | COVERED |
-| Malicious import/template/renderer/PDF corpus | Existing validators and renderer boundary tests | Dedicated adversarial corpus intentionally deferred | M2 | PARTIAL |
+| CSV byte/record/row/header/malformed-input bounds | API upload, worker parser and domain row validation | Parser-time record/row and deterministic literal/malformed corpus added in M2 | M2 | COVERED |
+| XLSX ZIP expansion, encryption and traversal | Signature check plus yauzl pre-inspection | Entry/individual/cumulative bounds, duplicate/normalized paths and sparse coordinate corpus added in M2 | M2 | COVERED |
+| OOXML external/macro/embedded/formula content | Forbidden filename checks and ExcelJS row validation | Relationship/content-type inspection and external hyperlink/object/formula corpus added in M2 | M2 | COVERED |
+| Participant terminal failure cleanup | Durable source cleanup columns/reconciler | Malicious validation failure now proves no staged/participant partial state and successful source deletion | M2 | COVERED |
+| Template asset byte/MIME/image/font bounds | Multipart limits, Sharp and SFNT validator | Raw-byte integration, confusion/container/dimension/format/SFNT corpus and malformed downstream parser containment added | M2 | COVERED |
+| Template schema, binding, prototype and literal injection | Strict Zod schema and explicit resolver | Unknown-field/binding/prototype/path/SSRF-like/literal corpus added; no interpretation or prototype mutation | M2 | COVERED |
+| Renderer strict input, capability and asset identity | Versioned schema, hash/purpose/budget checks and dependency test | URL-scheme/QR byte boundary, mutation, exact budget and expanded forbidden-capability coverage added | M2 | COVERED |
+| PDF output and worker failure containment | Post-render PDF checks and durable publication transactions | Incremental output cap, stream-error cleanup, malformed assets and no-publication integration proof added | M2 | COVERED |
 | Full secret/PII and broad resource-abuse sweep | Existing response and logging assertions | Repository-wide completion campaign intentionally deferred | M3 | PARTIAL |
 | Production proxy/TLS/network/key-management controls | Application fails safe with `trustProxy` unset | Deployment topology and operational proof are not present in this repository phase | Phase 8 | MISSING |
 
@@ -201,7 +228,6 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 
 ### Deferred Phase 7 work
 
-- Milestone 2 owns the dedicated malicious upload, OOXML, image/font, template, renderer, and PDF hardening corpus.
 - Milestone 3 owns the final repository-wide secret/PII leakage and broad resource-exhaustion sweep.
 
 ### Phase 8 deployment risks
@@ -211,4 +237,8 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 
 ### Validated and unresolved vulnerabilities
 
-The initial standard Codex Security scan produced one validated Low-severity finding: `/api/public/verify` used Fastify's default body parser limit before reaching its Redis-backed route limiter. M1 adds a 4 KiB route `bodyLimit` and a regression test proving oversized JSON is rejected before limiter or repository work. The scan produced no Critical or High finding. Subject to the full M1 validation gates, no validated vulnerability remains unresolved.
+The initial standard Codex Security scan produced one validated Low-severity finding: `/api/public/verify` used Fastify's default body parser limit before reaching its Redis-backed route limiter. M1 added a 4 KiB route `bodyLimit` and regression coverage.
+
+M2's targeted source tracing validated three Low-severity availability/correctness findings, each requiring an authenticated organization workflow and each already bounded by upstream input limits: CSV rows were collected before the configured row check, PDF chunks were retained until rendering completed before the output-byte check, and the 4,096-character verification URL schema admitted QR payloads beyond qrcode's byte-mode capacity. M2 now enforces rows/records while parsing, caps PDF chunks incrementally with stream cleanup, and validates verification URLs at the measured 2,331-byte qrcode capacity. M2 also closed non-exploitable contract gaps for OOXML external-relationship rejection, explicit prototype-sensitive key rejection, multipart oversize classification, and PNG animation/truncation structure; no SSRF, code execution, prototype pollution or renderer capability escape was reproduced.
+
+No Critical, High, Medium or Low finding from M1 or M2 remains unresolved. Phase 7 is not complete: the repository-wide M3 secret/PII and broad resource-abuse completion sweep remains deferred.

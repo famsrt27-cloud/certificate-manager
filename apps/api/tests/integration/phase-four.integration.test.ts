@@ -369,6 +369,15 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(unchanged.body.data.name).toBe("Foreign Secure Template");
   });
 
+  it("rejects template asset bytes at the multipart boundary before private storage", async () => {
+    const objectCount = objects.size;
+    const response = await admin(request(app.server).post(`/api/admin/templates/${templateId}/assets`))
+      .attach("file", Buffer.alloc(1_024 * 1_024 + 1, 0x61), { filename: "oversized.png", contentType: "image/png" });
+    expect(response.status).toBe(413);
+    expect(response.body.error.code).toBe("UPLOAD_TOO_LARGE");
+    expect(objects.size).toBe(objectCount);
+  });
+
   it("enforces published definition, asset-link, and asset-content immutability in PostgreSQL", async () => {
     await expect(database.updateTable("template_versions").set({ definition_json: { format_version: 1 } })
       .where("id", "=", versionId).execute()).rejects.toMatchObject({ code: "P0001" });

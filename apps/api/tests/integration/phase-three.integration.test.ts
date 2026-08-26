@@ -164,6 +164,16 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
     expect(JSON.stringify(inspected.body)).not.toContain("source_storage_key");
   });
 
+  it("rejects participant source bytes at the multipart boundary before private storage", async () => {
+    const objectCount = objects.size;
+    const response = await admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+      .set("idempotency-key", `oversized-${randomUUID()}`)
+      .attach("file", Buffer.alloc(1_024 * 1_024 + 1, 0x61), { filename: "oversized.csv", contentType: "text/csv" });
+    expect(response.status).toBe(413);
+    expect(response.body.error.code).toBe("UPLOAD_TOO_LARGE");
+    expect(objects.size).toBe(objectCount);
+  });
+
   it("rejects foreign project, training, participant, and job identifiers without side effects", async () => {
     for (const path of [
       `/api/admin/projects/${otherProjectId}`,

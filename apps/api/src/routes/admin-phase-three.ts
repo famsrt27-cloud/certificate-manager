@@ -74,6 +74,9 @@ const readImportFile = async (request: FastifyRequest, maximumBytes: number) => 
     }
   } catch (error) {
     if (error instanceof ApplicationError) throw error;
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "FST_REQ_FILE_TOO_LARGE") {
+      throw new ApplicationError("UPLOAD_TOO_LARGE", "The uploaded file is too large.", 413);
+    }
     throw new ApplicationError("UPLOAD_REJECTED", "The uploaded file could not be accepted.", 400);
   }
   if (file === undefined) return validationFailed();

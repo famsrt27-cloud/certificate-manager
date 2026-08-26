@@ -25,6 +25,21 @@ const containsForbiddenControlCharacter = (value: string): boolean => [...value]
 const SafeLiteralSchema = z.string().max(2_000).refine((value) => !containsForbiddenControlCharacter(value), {
   message: "control characters are not allowed"
 });
+const hasUnsafePrototypeKey = (input: unknown): boolean => {
+  const pending: unknown[] = [input];
+  let visited = 0;
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== "object") continue;
+    visited += 1;
+    if (visited > 5_000) return true;
+    for (const key of Object.keys(value)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") return true;
+      pending.push((value as Record<string, unknown>)[key]);
+    }
+  }
+  return false;
+};
 
 const PlacementFields = {
   x: CoordinateSchema.default(0),
@@ -90,7 +105,7 @@ export const TemplateElementSchema = z.union([
   ShapeElementSchema
 ]);
 
-export const TemplateDefinitionSchema = z.object({
+const TemplateDefinitionObjectSchema = z.object({
   format_version: z.literal(TEMPLATE_FORMAT_VERSION),
   page: z.object({
     width: DimensionSchema.min(100),
@@ -118,6 +133,11 @@ export const TemplateDefinitionSchema = z.object({
     }
   });
 });
+
+export const TemplateDefinitionSchema = z.preprocess(
+  (input) => hasUnsafePrototypeKey(input) ? null : input,
+  TemplateDefinitionObjectSchema
+);
 
 export type TemplateBinding = z.infer<typeof TemplateBindingSchema>;
 export type TemplateElement = z.infer<typeof TemplateElementSchema>;

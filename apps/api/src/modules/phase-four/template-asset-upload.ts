@@ -24,6 +24,27 @@ const detectMimeType = (bytes: Uint8Array): "image/png" | "image/jpeg" | "font/t
   return reject();
 };
 
+const validatePngContainer = (bytes: Uint8Array): void => {
+  let offset = 8;
+  let first = true;
+  let ended = false;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  while (offset + 12 <= bytes.byteLength) {
+    const length = view.getUint32(offset, false);
+    if (length > bytes.byteLength - offset - 12) reject();
+    const type = Buffer.from(bytes.subarray(offset + 4, offset + 8)).toString("latin1");
+    if (first && type !== "IHDR") reject();
+    if (type === "acTL") reject();
+    offset += 12 + length;
+    first = false;
+    if (type === "IEND") {
+      ended = true;
+      break;
+    }
+  }
+  if (!ended) reject();
+};
+
 const validateFontStructure = (bytes: Uint8Array): void => {
   if (bytes.length < 12) reject();
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -70,6 +91,7 @@ export const validateTemplateAssetUpload = async (input: {
   let heightPx: number | null = null;
   if (detectedMimeType.startsWith("image/")) {
     try {
+      if (detectedMimeType === "image/png") validatePngContainer(input.bytes);
       const metadata = await sharp(input.bytes, { animated: false, failOn: "error", limitInputPixels: IMAGE_MAX_PIXELS })
         .metadata();
       if (metadata.pages !== undefined && metadata.pages !== 1) return reject();
