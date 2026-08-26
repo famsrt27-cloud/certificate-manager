@@ -98,6 +98,8 @@ Rules:
 
 The `jti` supports correlation-safe replay controls if the approved implementation requires single use; raw `jti` values must not be logged.
 
+For the Phase 6 MVP, download tokens remain stateless and may be replayed only within their at-most-60-second validity window. Every redemption revalidates token time and current certificate/publication state. No raw `jti` is persisted or logged, and one-time-token persistence is not introduced without a later approved requirement.
+
 ## HMAC and asymmetric signing
 
 The approved MVP decision permits HMAC-SHA-256 for one backend signing authority. The implementation must pin `HS256` rather than trusting the token header and must isolate the shared secret.

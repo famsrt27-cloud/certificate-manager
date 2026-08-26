@@ -1,10 +1,13 @@
 import { loadApiEnvironment } from "@certificate-platform/config";
-import { LoginRateLimiter, RedisSessionStore, hashPassword } from "@certificate-platform/auth";
+import { LoginRateLimiter, PublicVerificationRateLimiter, RedisSessionStore, hashPassword } from "@certificate-platform/auth";
 import {
   checkDatabase,
   closeDatabase,
   createDatabase,
+  findPublicCertificateDownload,
+  findPublicCertificateDownloadAuthorization,
   findAuthenticationUser,
+  findPublicCertificateVerification,
   insertAuditRecord,
   loadEffectiveIdentity
 } from "@certificate-platform/database";
@@ -23,6 +26,9 @@ import { OrganizationAuthorizationService } from "./modules/auth/organization-au
 import { PhaseThreeService } from "./modules/phase-three/phase-three-service.js";
 import { PhaseFourService } from "./modules/phase-four/phase-four-service.js";
 import { PhaseFiveService } from "./modules/phase-five/phase-five-service.js";
+import { PublicVerificationService } from "./modules/phase-six/public-verification-service.js";
+import { PublicDownloadAuthorizationService } from "./modules/phase-six/public-download-authorization-service.js";
+import { PublicCertificateDownloadService } from "./modules/phase-six/public-certificate-download-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -93,6 +99,44 @@ const phaseThreeService = new PhaseThreeService({
 });
 const phaseFourService = new PhaseFourService({ database, storage, cursorSecret: environment.SESSION_SECRET });
 const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID });
+const publicVerificationService = new PublicVerificationService({
+  verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
+  repository: { findByPublicIdentifier: (publicIdentifier) => findPublicCertificateVerification(database, publicIdentifier) }
+});
+const publicVerificationRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_VERIFICATION_RATE_LIMIT_NETWORK_MAX
+});
+const activeVerificationSigningKey = environment.VERIFICATION_SIGNING_KEYS_JSON[environment.VERIFICATION_ACTIVE_KID];
+if (activeVerificationSigningKey === undefined) throw new Error("Active verification signing key is unavailable");
+const publicDownloadAuthorizationService = new PublicDownloadAuthorizationService({
+  verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
+  activeSigningKeyId: environment.VERIFICATION_ACTIVE_KID,
+  activeSigningKey: activeVerificationSigningKey,
+  ttlSeconds: environment.PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS,
+  repository: { findByPublicIdentifier: (publicIdentifier) =>
+    findPublicCertificateDownloadAuthorization(database, publicIdentifier) }
+});
+const publicDownloadAuthorizationRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:download-authorize-rate:v1:"
+});
+const publicCertificateDownloadService = new PublicCertificateDownloadService({
+  verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
+  repository: { findByPublicIdentifier: (publicIdentifier) =>
+    findPublicCertificateDownload(database, publicIdentifier) },
+  storage,
+  maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
+});
+const publicCertificateDownloadRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:download-rate:v1:"
+});
 
 const app = buildApi({
   dependencies: {
@@ -117,7 +161,12 @@ const app = buildApi({
     service: phaseFourService,
     templateAssetMaxBytes: environment.TEMPLATE_ASSET_MAX_BYTES
   },
-  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService }
+  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService },
+  publicVerification: { service: publicVerificationService, rateLimiter: publicVerificationRateLimiter },
+  publicDownloadAuthorization: { service: publicDownloadAuthorizationService,
+    rateLimiter: publicDownloadAuthorizationRateLimiter },
+  publicCertificateDownload: { service: publicCertificateDownloadService,
+    rateLimiter: publicCertificateDownloadRateLimiter }
 });
 
 let stopping = false;

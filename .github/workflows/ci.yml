@@ -23,7 +23,7 @@ jobs:
   quality:
     name: Quality Gate
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -55,6 +55,15 @@ jobs:
 
       - name: Security tests
         run: pnpm test:security
+
+      - name: Compose configuration
+        run: pnpm compose:config
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Public verification browser tests
+        run: pnpm exec playwright test tests/e2e/phase-six.spec.ts
 
       - name: Docker image build
         run: pnpm compose:build
@@ -93,11 +102,35 @@ jobs:
       DATABASE_URL: postgresql://certificate_app:ci-postgres-password@127.0.0.1:5432/certificate_platform_test
       TEST_DATABASE_URL: postgresql://certificate_app:ci-postgres-password@127.0.0.1:5432/certificate_platform_test
       TEST_REDIS_URL: redis://127.0.0.1:6379
+      OBJECT_STORAGE_ENDPOINT: http://127.0.0.1:9000
+      OBJECT_STORAGE_REGION: us-east-1
+      OBJECT_STORAGE_BUCKET: certificate-platform-ci-private
+      OBJECT_STORAGE_ACCESS_KEY: phase6-ci-minio
+      OBJECT_STORAGE_SECRET_KEY: phase6-ci-minio-secret
+      OBJECT_STORAGE_FORCE_PATH_STYLE: "true"
+      OBJECT_STORAGE_CREATE_BUCKET: "true"
       NODE_ENV: test
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Start private MinIO storage
+        shell: bash
+        run: |
+          docker run --detach --name phase6-minio \
+            --publish 127.0.0.1:9000:9000 \
+            --env MINIO_ROOT_USER=phase6-ci-minio \
+            --env MINIO_ROOT_PASSWORD=phase6-ci-minio-secret \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs phase6-minio
+          exit 1
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

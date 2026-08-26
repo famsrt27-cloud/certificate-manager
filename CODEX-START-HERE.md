@@ -31,6 +31,8 @@
 - Phases 1–4 are implemented.
 - Phase 4.5 stabilization/integrity work establishes the entry contract for Phase 5.
 - Phase 5 certificate generation is implemented, including durable planning/outbox delivery, BullMQ processing, immutable snapshot rendering, QR/PDF generation, private storage publication, integrity metadata, retry/dead-letter behavior and storage reconciliation.
+- Phase 6 public verification is implemented, including stateless signed verification, Redis-limited verification/download authorization, short-lived download-token redemption through the API, bounded private-storage reads with PDF integrity checks, final revocation/publication guards and the fragment-based `/verify` browser flow.
+- Phase 7 security testing is the next phase. Phase 6 completion does not imply production readiness; the Phase 2 production MFA gate and Phase 8 deployment work remain in force.
 - `docs/09-postgresql-schema.sql` and `packages/database/schema/0001-canonical-schema.sql` are frozen migration-0001 snapshots. Do not edit them to represent later schema changes; use append-only migrations.
 - Read migrations `202608240006_certificate-integrity-foundation.ts` and `202608240007_certificate-generation-contract.ts` before implementing certificate generation.
 - Read ADR-016, ADR-017 and ADR-018 before touching certificate lifecycle, job planning, regeneration, reissue, verification URL or renderer code.

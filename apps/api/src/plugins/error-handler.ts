@@ -3,16 +3,16 @@ import type { FastifyInstance } from "fastify";
 
 import { ApplicationError } from "../errors/application-error.js";
 
-interface FastifyBadRequest {
+interface FastifyClientRequestError {
   readonly statusCode: number;
   readonly code: string;
 }
 
-const isFastifyBadRequest = (error: unknown): error is FastifyBadRequest =>
+const isFastifyClientRequestError = (error: unknown): error is FastifyClientRequestError =>
   typeof error === "object"
   && error !== null
   && "statusCode" in error
-  && error.statusCode === 400
+  && (error.statusCode === 400 || error.statusCode === 413)
   && "code" in error
   && typeof error.code === "string"
   && error.code.startsWith("FST_ERR_");
@@ -25,6 +25,7 @@ export const registerErrorHandler = (app: FastifyInstance): void => {
   });
 
   app.setErrorHandler((error, request, reply) => {
+    const publicRequest = request.url.startsWith("/api/public/");
     if (error instanceof ApplicationError) {
       void reply
         .status(error.statusCode)
@@ -32,16 +33,24 @@ export const registerErrorHandler = (app: FastifyInstance): void => {
       return;
     }
 
-    if (isFastifyBadRequest(error)) {
+    if (isFastifyClientRequestError(error)) {
       void reply
         .status(400)
-        .send(createErrorResponse("VALIDATION_FAILED", "The request could not be processed.", request.id));
+        .send(createErrorResponse(
+          publicRequest ? "PUBLIC_REQUEST_FAILED" : "VALIDATION_FAILED",
+          publicRequest ? "The request could not be completed." : "The request could not be processed.",
+          request.id
+        ));
       return;
     }
 
     request.log.error({ err: error, error_code: "INTERNAL_ERROR" }, "request failed");
     void reply
       .status(500)
-      .send(createErrorResponse("INTERNAL_ERROR", "The request could not be processed.", request.id));
+      .send(createErrorResponse(
+        publicRequest ? "PUBLIC_REQUEST_FAILED" : "INTERNAL_ERROR",
+        publicRequest ? "The request could not be completed." : "The request could not be processed.",
+        request.id
+      ));
   });
 };

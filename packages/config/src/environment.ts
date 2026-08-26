@@ -45,7 +45,8 @@ const VerificationSigningKeysSchema = z.string().transform((value, context): Rea
     context.addIssue({ code: "custom", message: "must be a JSON object of verification signing keys" });
     return z.NEVER;
   }
-  const keys: Record<string, Uint8Array> = {};
+  const rawKeyCount = value.match(/"[A-Za-z0-9._-]{1,128}"\s*:/g)?.length ?? 0;
+  const entries: Array<readonly [string, Uint8Array]> = [];
   for (const [keyId, encoded] of Object.entries(parsed)) {
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(keyId) || typeof encoded !== "string" || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
       context.addIssue({ code: "custom", message: "contains an invalid verification signing key" });
@@ -56,13 +57,17 @@ const VerificationSigningKeysSchema = z.string().transform((value, context): Rea
       context.addIssue({ code: "custom", message: "contains an invalid verification signing key" });
       return z.NEVER;
     }
-    keys[keyId] = new Uint8Array(bytes);
+    entries.push([keyId, new Uint8Array(bytes)]);
   }
-  if (Object.keys(keys).length === 0) {
+  if (entries.length === 0) {
     context.addIssue({ code: "custom", message: "must contain at least one verification signing key" });
     return z.NEVER;
   }
-  return Object.freeze(keys);
+  if (rawKeyCount !== entries.length) {
+    context.addIssue({ code: "custom", message: "must not contain duplicate or malformed verification key identifiers" });
+    return z.NEVER;
+  }
+  return Object.freeze(Object.fromEntries(entries));
 });
 
 const ObjectStorageEnvironmentSchema = z.object({
@@ -123,8 +128,17 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   LOGIN_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(3_600).default(900),
   LOGIN_RATE_LIMIT_ACCOUNT_MAX: z.coerce.number().int().min(1).max(20).default(5),
   LOGIN_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(100).default(20),
+  PUBLIC_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+  PUBLIC_VERIFICATION_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(1_000).default(30),
+  PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS: z.coerce.number().int().min(1).max(60).default(60),
+  PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+  PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(1_000).default(10),
+  PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+  PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(1_000).default(10),
+  CERTIFICATE_PDF_MAX_BYTES: z.coerce.number().int().min(1_024).max(50 * 1_024 * 1_024).default(10 * 1_024 * 1_024),
   TEMPLATE_ASSET_MAX_BYTES: z.coerce.number().int().min(1_024).max(10 * 1_024 * 1_024).default(5 * 1_024 * 1_024),
   VERIFICATION_ACTIVE_KID: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/).default("development-key"),
+  VERIFICATION_SIGNING_KEYS_JSON: VerificationSigningKeysSchema,
   ADMIN_MFA_POLICY: z.literal("DEFERRED_NON_PRODUCTION").default("DEFERRED_NON_PRODUCTION"),
   ...ObjectStorageEnvironmentSchema.shape
 }).superRefine((environment, context) => {
@@ -133,6 +147,13 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
       code: "custom",
       path: ["SESSION_ABSOLUTE_TTL_SECONDS"],
       message: "must be greater than or equal to the idle TTL"
+    });
+  }
+  if (!Object.hasOwn(environment.VERIFICATION_SIGNING_KEYS_JSON, environment.VERIFICATION_ACTIVE_KID)) {
+    context.addIssue({
+      code: "custom",
+      path: ["VERIFICATION_ACTIVE_KID"],
+      message: "must identify a configured verification signing key"
     });
   }
   if (environment.NODE_ENV === "production") {

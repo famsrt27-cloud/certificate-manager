@@ -43,6 +43,8 @@ Status: Implemented on 2026-08-25. Completion evidence covers the authenticated 
 ## Phase 6 — Public Verification
 Verification, stateless token, rate limiting, secure download.
 
+Status: Implemented on 2026-08-26. Completion evidence covers stateless HS256 verification tokens with trusted-key rotation, current-state public verification, separately typed short-lived download authorization, bounded application-mediated private PDF redemption, byte-length/SHA-256/PDF-signature validation, final revocation/publication guards, distributed Redis rate limits, generic public failures and the fragment-based `/verify` browser flow. Phase 7 security testing and Phase 8 production deployment remain incomplete.
+
 ## Phase 7 — Security Testing
 Threat-model tests, abuse testing, upload/PDF hardening.
 
