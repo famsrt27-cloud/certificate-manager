@@ -82,7 +82,7 @@ export class AuthenticationService {
     this.assertAllowedOrigin(context.origin);
     const limit = await this.#rateLimiter.consume(input.email, context.networkAddress);
     if (!limit.allowed) {
-      await this.#writeAuthenticationFailure(context.requestId, "RATE_LIMITED");
+      if (limit.auditSuggested) await this.#writeAuthenticationFailure(context.requestId, "RATE_LIMITED");
       throw new LoginRateLimitError(limit.retryAfterSeconds);
     }
 

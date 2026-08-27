@@ -15,7 +15,7 @@ describe("opaque admin cursor", () => {
     });
   });
 
-  it("rejects tampering and cross-resource replay", () => {
+  it("rejects tampering and cross-resource or cross-organization replay", () => {
     const codec = new CursorCodec("cursor-secret-at-least-32-bytes-value");
     const cursor = codec.encode({ organizationId, resource: "projects", createdAt: new Date(),
       id: "00000000-0000-4000-8000-000000000002" });
@@ -26,5 +26,12 @@ describe("opaque admin cursor", () => {
     expect(tamperedCursor).not.toBe(cursor);
     expect(() => codec.decode(tamperedCursor, organizationId, "projects")).toThrow();
     expect(() => codec.decode(cursor, organizationId, "trainings")).toThrow();
+    expect(() => codec.decode(cursor, "00000000-0000-4000-8000-000000000099", "projects")).toThrow();
+  });
+
+  it("rejects malformed and oversized encodings before decryption", () => {
+    const codec = new CursorCodec("cursor-secret-at-least-32-bytes-value");
+    expect(() => codec.decode("not+base64url", organizationId, "projects")).toThrow();
+    expect(() => codec.decode("a".repeat(2_049), organizationId, "projects")).toThrow();
   });
 });

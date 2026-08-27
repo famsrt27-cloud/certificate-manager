@@ -190,6 +190,12 @@ describe("admin authentication routes", () => {
     expect(first.status).toBe(401);
     expect(limited.status).toBe(429);
     expect(limited.headers["retry-after"]).toBe("900");
+    expect(limited.headers["cache-control"]).toBe("no-store");
+    const rateLimitAuditCount = fixture.auditEvents.filter((event) =>
+      event.action === "AUTH_LOGIN_FAILED" && event.metadata?.reason === "RATE_LIMITED").length;
+    for (let index = 0; index < 5; index += 1) await login(fixture.app, "wrong-password");
+    expect(fixture.auditEvents.filter((event) =>
+      event.action === "AUTH_LOGIN_FAILED" && event.metadata?.reason === "RATE_LIMITED")).toHaveLength(rateLimitAuditCount);
     await fixture.app.close();
   });
 

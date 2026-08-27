@@ -5,7 +5,18 @@ export interface StructuredLoggerOptions {
     paths: string[];
     censor: string;
   };
+  serializers: {
+    err: (error: unknown) => { type: string; message: string; stack: string };
+  };
 }
+
+const SAFE_ERROR_TYPE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+
+export const serializeErrorForLogging = (error: unknown): { type: string; message: string; stack: string } => {
+  if (!(error instanceof Error)) return { type: "UnknownError", message: "[REDACTED]", stack: "[REDACTED]" };
+  const type = error.constructor.name;
+  return { type: SAFE_ERROR_TYPE.test(type) ? type : "Error", message: "[REDACTED]", stack: "[REDACTED]" };
+};
 
 const SENSITIVE_LOG_PATHS: string[] = [
   "req.headers.authorization",
@@ -53,5 +64,6 @@ export const createStructuredLoggerOptions = (level: string): StructuredLoggerOp
   redact: {
     paths: [...SENSITIVE_LOG_PATHS],
     censor: "[REDACTED]"
-  }
+  },
+  serializers: { err: serializeErrorForLogging }
 });

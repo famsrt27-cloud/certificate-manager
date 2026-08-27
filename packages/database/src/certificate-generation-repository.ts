@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import type { Kysely, Transaction } from "kysely";
 
-import { canonicalizeGenerationParticipantIds, createCertificateGenerationRequestFingerprint, type CertificateGenerationSelectionMode } from "@certificate-platform/domain";
+import { CERTIFICATE_GENERATION_MAX_PARTICIPANTS, canonicalizeGenerationParticipantIds,
+  createCertificateGenerationRequestFingerprint, type CertificateGenerationSelectionMode } from "@certificate-platform/domain";
 
+import { insertAuditRecord, type NewAuditRecord } from "./authentication-repository.js";
 import type { Database } from "./types.js";
 
 export interface PlanCertificateGenerationInput {
@@ -17,6 +19,7 @@ export interface PlanCertificateGenerationInput {
   readonly rendererRevision: string;
   readonly verificationKeyKid: string;
   readonly plannedIssuedAt: Date;
+  readonly auditRecord?: Omit<NewAuditRecord, "resourceId" | "metadata">;
 }
 
 const isUniqueViolation = (error: unknown): boolean =>
@@ -53,6 +56,7 @@ export const planCertificateGenerationInTransaction = async (transaction: Transa
   let participantIds: readonly string[];
   if (input.selectionMode === "EXPLICIT") {
     participantIds = canonicalizeGenerationParticipantIds(input.requestedParticipantIds ?? []);
+    if (participantIds.length > CERTIFICATE_GENERATION_MAX_PARTICIPANTS) return { kind: "SELECTION_TOO_LARGE" as const };
     const eligible = await transaction.selectFrom("training_participants as relation").innerJoin("participants as participant", (join) => join
       .onRef("participant.id", "=", "relation.participant_id").onRef("participant.organization_id", "=", "relation.organization_id"))
       .select("participant.id").where("relation.organization_id", "=", input.organizationId).where("relation.training_id", "=", input.trainingId)
@@ -64,8 +68,10 @@ export const planCertificateGenerationInTransaction = async (transaction: Transa
     const resolved = await transaction.selectFrom("training_participants as relation").select("relation.participant_id")
       .where("relation.organization_id", "=", input.organizationId).where("relation.training_id", "=", input.trainingId).where("relation.status", "=", "ACTIVE")
       .where("relation.participant_id", "not in", transaction.selectFrom("certificates").select("participant_id")
-        .where("organization_id", "=", input.organizationId).where("training_id", "=", input.trainingId)).execute();
+        .where("organization_id", "=", input.organizationId).where("training_id", "=", input.trainingId))
+      .limit(CERTIFICATE_GENERATION_MAX_PARTICIPANTS + 1).execute();
     if (resolved.length === 0) return { kind: "NO_WORK" as const };
+    if (resolved.length > CERTIFICATE_GENERATION_MAX_PARTICIPANTS) return { kind: "SELECTION_TOO_LARGE" as const };
     participantIds = canonicalizeGenerationParticipantIds(resolved.map((row) => row.participant_id));
   }
   const recipients = await transaction.selectFrom("participants").select(["id", "display_name"]).where("organization_id", "=", input.organizationId).where("id", "in", participantIds).execute();
@@ -80,6 +86,14 @@ export const planCertificateGenerationInTransaction = async (transaction: Transa
     await transaction.insertInto("certificate_generation_items").values({ organization_id: input.organizationId, job_id: jobId, certificate_id: certificate.id, generation_revision: certificate.generation_revision }).execute();
   }
   await transaction.insertInto("queue_outbox").values({ organization_id: input.organizationId, message_type: "CERTIFICATE_GENERATION", deduplication_key: `${jobId}-generate`, payload_json: { version: 1, job_id: jobId, organization_id: input.organizationId } }).execute();
+  if (input.auditRecord !== undefined) {
+    await insertAuditRecord(transaction, {
+      ...input.auditRecord,
+      resourceId: jobId,
+      metadata: { training_id: input.trainingId, template_version_id: input.templateVersionId,
+        selection_mode: input.selectionMode, participant_count: participantIds.length }
+    });
+  }
   return { kind: "CREATED" as const, jobId, status: "QUEUED" as const, fingerprint };
 };
 

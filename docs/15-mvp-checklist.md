@@ -67,3 +67,9 @@
 - [ ] Vitest unit/integration suites
 - [ ] Supertest API integration suites
 - [ ] Playwright E2E suites
+
+## Phase 7 security completion
+- [x] Milestone 1 — threat model and security-boundary abuse suite
+- [x] Milestone 2 — malicious input, template, renderer and PDF hardening
+- [x] Milestone 3 — final repository sweep, leakage/privacy audit and resource completion gate
+- [ ] Phase 8 deployment, secret operations, monitoring, backup and restore evidence

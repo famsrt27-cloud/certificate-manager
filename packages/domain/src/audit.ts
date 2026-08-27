@@ -22,7 +22,8 @@ export const AUDIT_ACTIONS = [
   "TEMPLATE_VERSION_PUBLISHED",
   "TEMPLATE_VERSION_ARCHIVED",
   "TEMPLATE_ASSET_CREATED",
-  "TEMPLATE_ASSET_ARCHIVED"
+  "TEMPLATE_ASSET_ARCHIVED",
+  "CERTIFICATE_GENERATION_REQUESTED"
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -33,14 +34,17 @@ export interface AuditEvent {
   readonly actorMembershipId: string | null;
   readonly action: AuditAction;
   readonly resourceType: "authentication" | "authorization" | "project" | "training" | "participant" | "participant_import"
-    | "template" | "template_version" | "template_asset";
+    | "template" | "template_version" | "template_asset" | "certificate_generation";
   readonly resourceId: string | null;
   readonly requestId: string;
   readonly metadata:
     | null
     | { readonly reason: "INVALID_CREDENTIALS" | "RATE_LIMITED" }
     | { readonly reason: "AUTHORIZATION_CHANGED" | "USER_INACTIVE" | "SESSION_EXPIRED" }
-    | { readonly reason: "NO_ACTIVE_MEMBERSHIP" | "MISSING_PERMISSION"; readonly permission: string };
+    | { readonly reason: "NO_ACTIVE_MEMBERSHIP" | "MISSING_PERMISSION"; readonly permission: string }
+    | { readonly training_id: string; readonly template_version_id: string;
+      readonly selection_mode: "ALL_ELIGIBLE" | "EXPLICIT"; readonly participant_count: number;
+      readonly reason?: never };
 }
 
 export interface AuditWriter {

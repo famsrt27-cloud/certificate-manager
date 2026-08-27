@@ -1,6 +1,6 @@
 # Repository Threat Model
 
-Status: Phase 7 Milestones 1-2 security baseline, 2026-08-26. Milestone 3 remains deferred.
+Status: Final Phase 7 security-testing state, 2026-08-27. Milestones 1, 2, and 3 are complete locally; remote CI remains the final external completion check.
 
 This is the canonical, source-backed threat model for the implemented repository. It describes deployed code boundaries and documented contracts rather than a generic checklist. `docs/23-threat-model.md` remains the earlier architectural summary; this document adds the route, control, and test-level evidence required by Phase 7.
 
@@ -20,7 +20,7 @@ The modeled system consists of:
 - admin authentication, browser session, CSRF, and organization authorization flows (`apps/api/src/modules/auth`, `apps/web/src`); and
 - public verification, download authorization, and download redemption (`apps/api/src/modules/phase-six`, `apps/api/src/routes/public-*`).
 
-The dedicated malicious upload, template, renderer, and PDF corpus expansion is covered by Phase 7 Milestone 2. The final leakage, broad resource-abuse, and completion sweep remains Milestone 3.
+The dedicated malicious upload, template, renderer, and PDF corpus expansion is covered by Phase 7 Milestone 2. Milestone 3 completed the final runtime inventory, Standard Security Scan, invariant/leakage review, and broad resource-abuse sweep. Phase 8 deployment controls remain outside this application-security phase.
 
 ## Security assets
 
@@ -175,7 +175,7 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 
 - **Milestone 1:** access-control/IDOR, role confusion, session lifecycle/fixation/revocation, CSRF/Origin, password and login behavior, Redis fail-closed behavior, public capability parsing/type/state/error abuse, proxy-header behavior, distributed rate-limit atomicity, and targeted capability redaction.
 - **Milestone 2:** malicious CSV/XLSX and OOXML relationships, image/font metadata, template injection/XSS/SSRF/path traversal, renderer resource exhaustion, and adversarial PDF inputs are covered by the source-backed tests listed above.
-- **Milestone 3:** final full-repository sweep, complete secret/PII leakage review, broad resource-abuse limits, and the Phase 7 completion gate.
+- **Milestone 3:** completed final full-repository Standard Security Scan, complete secret/PII leakage review, error/header/browser/queue/database/storage review, broad resource-abuse limits, and the Phase 7 completion gate.
 - **Phase 8 deployment validation:** explicit reverse-proxy trust/CIDR configuration, production TLS and secure-cookie termination, managed secret/key operations, network policies, process isolation, production object-store policy, monitoring, backups, and incident runbooks.
 
 ## Security coverage gap matrix
@@ -215,8 +215,43 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 | Template schema, binding, prototype and literal injection | Strict Zod schema and explicit resolver | Unknown-field/binding/prototype/path/SSRF-like/literal corpus added; no interpretation or prototype mutation | M2 | COVERED |
 | Renderer strict input, capability and asset identity | Versioned schema, hash/purpose/budget checks and dependency test | URL-scheme/QR byte boundary, mutation, exact budget and expanded forbidden-capability coverage added | M2 | COVERED |
 | PDF output and worker failure containment | Post-render PDF checks and durable publication transactions | Incremental output cap, stream-error cleanup, malformed assets and no-publication integration proof added | M2 | COVERED |
-| Full secret/PII and broad resource-abuse sweep | Existing response and logging assertions | Repository-wide completion campaign intentionally deferred | M3 | PARTIAL |
-| Production proxy/TLS/network/key-management controls | Application fails safe with `trustProxy` unset | Deployment topology and operational proof are not present in this repository phase | Phase 8 | MISSING |
+| Secret, credential, error-object and stack leakage | Central path redaction, fixed HTTP error envelopes, safe job codes | Error serialization retains only a bounded class name and redacted message/stack; repository paths and caught exceptions reviewed | M3 | COVERED |
+| Public PII and internal-identifier minimization | Public verification/download projections and integration assertions | Public responses re-audited; revoked response stays minimal and storage/revision/key fields remain absent | M3 | COVERED |
+| Request ID, headers, mass assignment and object merging | Server UUID IDs, static headers, strict schemas and explicit repository fields | Injection and trust-changing unknown-field corpus plus non-template merge review completed | M3 | COVERED |
+| SQL/query construction, cursor and identifier abuse | Parameterized Kysely, UUID schemas, AES-GCM scoped cursor | Raw/dynamic query review plus byte-tamper, malformed, oversized and cross-scope cursor proofs | M3 | COVERED |
+| HTTP body, multipart and pagination bounds | Explicit JSON/body/upload limits and cursor pagination | Field/file/boundary abuse, generation cap and version/asset list regressions added | M3 | COVERED |
+| Redis, cache and browser capability confidentiality | HMAC keys, independent buckets, no-store/noindex and memory-only tokens | Successful/error browser paths and login audit threshold behavior reviewed | M3 | COVERED |
+| Queue, database, transaction and storage invariants | Strict messages, PostgreSQL constraints, state rechecks and object integrity | Replay/cleanup/TOCTOU/key-confusion/incremental-read review completed | M3 | COVERED |
+| Privacy minimization and package capability direction | Minimal models and package-boundary tests | No prohibited new data or renderer/template/domain infrastructure capability found | M3 | COVERED |
+| Production proxy/TLS/network/key-management controls | Application fails safe with `trustProxy` unset and production MFA startup blocked | Requires Phase 8 topology, secret operations, ingress and operational evidence | Phase 8 | BLOCKED |
+
+## Milestone 3 final audit
+
+The final runtime inventory covered the Next.js browser surface; every operational, authentication, tenant-admin, import, template, generation, verification and download Fastify route; participant-import/generation/outbox worker paths; PostgreSQL, Redis/BullMQ and S3/MinIO; and the auth, domain, config/logging, database, queue, storage, template-engine and certificate-renderer packages. Documentation-only paths and unimplemented certificate-admin endpoints were not treated as runtime attack surfaces.
+
+The Standard Security Scan and source validation found four application-owned resource/audit issues, all remediated in M3: unbounded generation cardinality (Medium), login rate-limit audit amplification (Medium), missing atomic generation audit evidence (Low), and unbounded template-version/asset lists with quadratic link association (Low). Meaningful rejected candidates included safe parameterized Kysely construction, strict mass-assignment/prototype boundaries, generic external errors, server-generated headers/storage keys, queue forgery without Redis authority, storage cleanup races without attacker-reachable prerequisites, and capability persistence without a browser sink.
+
+Readiness exposure, client-address preservation behind a future proxy, production OpenAPI policy, renderer process/container isolation, object-store bucket policy, audit retention, credential separation, TLS, monitoring, backup, and incident response are Phase 8 deployment prerequisites. The API cannot currently start in production because the intentional MFA gate remains active. These controls are `BLOCKED` for repository-only proof, not unexplained Phase 7 gaps.
+
+### Resource limit matrix
+
+| Input/resource | Bound | Enforcement layer | Test/evidence |
+| --- | --- | --- | --- |
+| General API JSON | 1 MiB | Explicit Fastify `bodyLimit` | `apps/api/src/app.ts`; API error suites |
+| Public verify/authorize/redeem JSON | 4 KiB each | Route `bodyLimit` before handler | public abuse/integration tests |
+| Login email/password | 320 characters / 72 UTF-8 bytes | strict contracts | authentication/password tests |
+| Admin strings, arrays and list pages | Contract maxima; pages 1-100, default 50 | Zod, cursor and SQL `LIMIT limit+1` | Phase 3/4 and M3 boundary tests |
+| Identifiers/cursors | UUID schemas; cursor 2,048 bytes | route schema and cursor codec | malformed/tamper/scope tests |
+| Certificate generation set | 1-1,000 exact participants | request schema and planner `LIMIT 1001` | M3 boundary and PostgreSQL tests |
+| Multipart uploads | one file, zero fields, one part | global multipart limits | Phase 3/4 multipart tests |
+| Participant source and CSV | 5 MiB default; 4 KiB record; 10,000 rows default | upload/storage and streaming parser | malicious CSV corpus |
+| XLSX/ZIP | 1,000 entries; 25 MiB expanded default; bounded paths/rows/columns | yauzl preflight before ExcelJS | malicious OOXML corpus |
+| Template definition | strict version; at most 100 bounded elements | template schema | template/binder tests |
+| Raster/font assets | upload bytes plus bounded pixels/frames/SFNT tables | asset validators | image/font corpus |
+| Queue payload | fixed versioned UUID/enum object; strict unknown-field rejection | queue schemas | queue and M3 tests |
+| Render assets/QR/PDF | configured aggregate; QR 2,331 UTF-8 bytes; PDF 10 MiB default | render-input and incremental renderer | renderer tests |
+| Private storage read | declared and incremental cumulative maximum | S3 stream loop | missing-length/cap-crossing tests |
+| Redis rate-limit state | fixed HMAC key, integer counter, bounded TTL | atomic Lua/config | real-Redis tests |
 
 ## Residual risks
 
@@ -226,19 +261,17 @@ There are no public GET routes that accept a raw certificate UUID, `pcid`, certi
 - Download `jti` is entropy and correlation material inside the signed capability, not a public identifier or a server-side one-time-use store. One-time redemption is not the approved contract.
 - Public verification intentionally reports the minimal revoked result defined by the API contract. Revocation reason and recipient/program data are withheld.
 
-### Deferred Phase 7 work
-
-- Milestone 3 owns the final repository-wide secret/PII leakage and broad resource-exhaustion sweep.
-
 ### Phase 8 deployment risks
 
 - The application currently leaves Fastify `trustProxy` disabled, so untrusted forwarding headers are ignored. A production reverse proxy must define explicit trusted hops/CIDRs before enabling proxy trust; enabling broad `trustProxy: true` would make address-based limits spoofable.
 - TLS termination, production cookie transport, network segmentation, managed signing-key rotation, Redis/PostgreSQL/MinIO credentials, process/container restrictions, monitoring, backup, and incident-response controls require deployment evidence. Their absence at this phase is deployment risk, not a demonstrated application vulnerability.
 
-### Validated and unresolved vulnerabilities
+### Validated findings
 
 The initial standard Codex Security scan produced one validated Low-severity finding: `/api/public/verify` used Fastify's default body parser limit before reaching its Redis-backed route limiter. M1 added a 4 KiB route `bodyLimit` and regression coverage.
 
 M2's targeted source tracing validated three Low-severity availability/correctness findings, each requiring an authenticated organization workflow and each already bounded by upstream input limits: CSV rows were collected before the configured row check, PDF chunks were retained until rendering completed before the output-byte check, and the 4,096-character verification URL schema admitted QR payloads beyond qrcode's byte-mode capacity. M2 now enforces rows/records while parsing, caps PDF chunks incrementally with stream cleanup, and validates verification URLs at the measured 2,331-byte qrcode capacity. M2 also closed non-exploitable contract gaps for OOXML external-relationship rejection, explicit prototype-sensitive key rejection, multipart oversize classification, and PNG animation/truncation structure; no SSRF, code execution, prototype pollution or renderer capability escape was reproduced.
 
-No Critical, High, Medium or Low finding from M1 or M2 remains unresolved. Phase 7 is not complete: the repository-wide M3 secret/PII and broad resource-abuse completion sweep remains deferred.
+M3 remediated the four validated findings described above. Defense-in-depth changes also made caught `Error` serialization content-independent, made private S3 reads stop incrementally when `ContentLength` is missing or false, made admin-auth error responses uniformly `no-store`, made the global JSON-parser bound explicit, and tightened direct cursor decoding.
+
+No unresolved validated Critical, High, Medium or Low findings were identified within the tested Phase 7 scope. This is calibrated evidence for the implemented repository and test conditions, not a claim that the software is perfectly secure or vulnerability-free. Final Phase 7 completion additionally requires the M3 remote Quality and Integration gates to succeed.

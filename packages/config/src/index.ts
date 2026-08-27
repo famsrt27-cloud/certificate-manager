@@ -11,4 +11,4 @@ export {
   type WebPublicEnvironment,
   type WorkerEnvironment
 } from "./environment.js";
-export { createStructuredLoggerOptions, type StructuredLoggerOptions } from "./logging.js";
+export { createStructuredLoggerOptions, serializeErrorForLogging, type StructuredLoggerOptions } from "./logging.js";

@@ -31,6 +31,8 @@ export interface BuildApiOptions {
   readonly publicCertificateDownload?: PublicCertificateDownloadRouteOptions;
 }
 
+export const API_JSON_BODY_LIMIT_BYTES = 1_048_576;
+
 export const buildApi = ({
   dependencies,
   readinessTimeoutMs,
@@ -45,6 +47,7 @@ export const buildApi = ({
   publicCertificateDownload
 }: BuildApiOptions): FastifyInstance => {
   const app = Fastify({
+    bodyLimit: API_JSON_BODY_LIMIT_BYTES,
     genReqId: () => randomUUID(),
     logger: logger ? createStructuredLoggerOptions(logLevel) : false,
     requestIdHeader: false
@@ -55,8 +58,10 @@ export const buildApi = ({
     return payload;
   });
   app.addHook("onRequest", async (request, reply) => {
-    if (request.url.startsWith("/api/public/")) {
+    if (request.url.startsWith("/api/public/") || request.url.startsWith("/api/admin/auth/")) {
       void reply.header("cache-control", "no-store");
+    }
+    if (request.url.startsWith("/api/public/")) {
       void reply.header("x-robots-tag", "noindex, nofollow, noarchive");
     }
   });

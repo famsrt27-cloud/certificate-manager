@@ -168,7 +168,9 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
     expect(response.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
     expect(response.headers["x-robots-tag"]).toBe("noindex, nofollow, noarchive");
-    expect(JSON.stringify(authorization.body)).not.toMatch(/storage|object|bucket|url|sha|public_identifier/i);
+    expect(Object.keys(authorization.body).sort()).toEqual(["data", "meta"]);
+    expect(Object.keys(authorization.body.data).sort()).toEqual(["download_token", "expires_in"]);
+    expect(Object.keys(authorization.body.meta)).toEqual(["request_id"]);
   });
 
   it("blocks an authorization token after the certificate is revoked", async () => {

@@ -133,10 +133,20 @@ describe.skipIf(!enabled)("Phase Five generation API integration", () => {
     const outbox = await database.selectFrom("queue_outbox").select(["message_type", "payload_json", "dispatched_at"])
       .where("deduplication_key", "=", `${response.body.data.job_id}-generate`).executeTakeFirstOrThrow();
     expect(outbox).toEqual({ message_type: "CERTIFICATE_GENERATION", payload_json: { version: 1, job_id: response.body.data.job_id, organization_id: organizationId }, dispatched_at: null });
+    const audit = await database.selectFrom("audit_logs").select(["organization_id", "actor_user_id", "actor_membership_id",
+      "action", "resource_type", "resource_id", "request_id", "metadata"])
+      .where("action", "=", "CERTIFICATE_GENERATION_REQUESTED").where("resource_id", "=", response.body.data.job_id)
+      .executeTakeFirstOrThrow();
+    expect(audit).toEqual({ organization_id: organizationId, actor_user_id: userId, actor_membership_id: membershipId,
+      action: "CERTIFICATE_GENERATION_REQUESTED", resource_type: "certificate_generation",
+      resource_id: response.body.data.job_id, request_id: response.body.meta.request_id,
+      metadata: { training_id: trainingId, template_version_id: versionId, selection_mode: "EXPLICIT", participant_count: 2 } });
     const replay = await post(key).send({ template_version_id: versionId, participant_ids: [secondParticipantId, participantId] });
     expect(replay.status).toBe(202);
     expect(replay.body.data.job_id).toBe(response.body.data.job_id);
     expect(await database.selectFrom("queue_outbox").select("id").where("deduplication_key", "=", `${response.body.data.job_id}-generate`).execute()).toHaveLength(1);
+    expect(await database.selectFrom("audit_logs").select("id").where("action", "=", "CERTIFICATE_GENERATION_REQUESTED")
+      .where("resource_id", "=", response.body.data.job_id).execute()).toHaveLength(1);
   });
 
   it("maps explicit conflicts, ALL_ELIGIBLE no-work, and semantic key reuse to 409", async () => {

@@ -54,6 +54,9 @@ test("fragment verification and application-mediated PDF download keep bearer to
 });
 
 test("revoked and malformed tokens show only generic safe public states", async ({ page }) => {
+  const failedToken = "synthetic.failed.verification.token";
+  const consoleMessages: string[] = [];
+  page.on("console", (message) => consoleMessages.push(message.text()));
   await page.route("**/api/public/verify", async (route) => {
     const body = route.request().postDataJSON() as { token?: string };
     if (body.token === verificationToken) {
@@ -72,4 +75,16 @@ test("revoked and malformed tokens show only generic safe public states", async 
   await page.goto("/verify#unexpected=value");
   await expect(page.getByText("The certificate could not be verified.")).toBeVisible();
   expect(page.url()).toBe("http://127.0.0.1:3100/verify");
+
+  await page.goto(`/verify#token=${encodeURIComponent(failedToken)}`);
+  await expect(page.getByText("The certificate could not be verified.")).toBeVisible();
+  expect(page.url()).toBe("http://127.0.0.1:3100/verify");
+  expect(await page.locator("body").textContent()).not.toContain(failedToken);
+  expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length,
+    cookies: document.cookie }))).toEqual({ local: 0, session: 0, cookies: "" });
+  expect(consoleMessages.join("\n")).not.toContain(failedToken);
+  const resourceUrls = await page.evaluate(() => performance.getEntriesByType("resource").map((entry) => entry.name));
+  const pageOrigin = new URL(page.url()).origin;
+  expect(resourceUrls.every((url) => new URL(url).origin === pageOrigin)).toBe(true);
+  expect(resourceUrls.join("\n")).not.toContain(failedToken);
 });

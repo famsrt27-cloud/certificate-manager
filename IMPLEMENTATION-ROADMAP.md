@@ -48,6 +48,8 @@ Status: Implemented on 2026-08-26. Completion evidence covers stateless HS256 ve
 ## Phase 7 — Security Testing
 Threat-model tests, abuse testing, upload/PDF hardening.
 
+Status: Implemented on 2026-08-27. Milestone 1 completed threat-model and authorization/capability abuse coverage; Milestone 2 completed malicious import/template/asset/renderer/PDF hardening; Milestone 3 completed the final Standard Security Scan, leakage/privacy audit, queue/database/storage/resource-bound review, remediation, and local completion gate. Phase 8 has not started; final status remains subject to the Phase 7 branch remote Quality and Integration gates.
+
 ## Phase 8 — Production Deployment
 Observability, backups, deployment, restore drill, documentation.
 

@@ -97,7 +97,7 @@ Required suites include:
 - Phase 4: template validation, asset and immutable-publish tests
 - Phase 5: BullMQ, PDFKit, qrcode, storage and idempotency tests
 - Phase 6: public verification, rate limit and secure-download tests
-- Phase 7: complete threat-model abuse suite
+- Phase 7: complete threat-model abuse suite, final Standard Security Scan, leakage/privacy review, queue/database/storage invariant sweep, and resource-limit matrix in `docs/16-threat-model.md`
 - Phase 8: deployment smoke, backup and restore tests
 
 A phase is not complete while its critical security or data-integrity tests are failing.

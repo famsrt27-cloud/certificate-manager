@@ -8,7 +8,7 @@ import {
   archivePublishedTemplateVersionInTransaction, archiveTemplateAssetInTransaction, archiveTemplateInTransaction,
   armStorageCleanup, cancelStorageCleanupInTransaction, completeStorageCleanupByKey,
   createTemplateAssetInTransaction, createTemplateInTransaction, createTemplateVersionInTransaction,
-  deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateVersion, listTemplateAssets,
+  deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateAssetsByIds, findTemplateVersion, listTemplateAssets,
   listTemplates, listTemplateVersions, publishTemplateVersionInTransaction, runAuditedTransaction,
   updateDraftTemplateVersionInTransaction, updateTemplateInTransaction,
   type DatabaseClient, type JsonValue, type NewAuditRecord
@@ -159,9 +159,15 @@ export class PhaseFourService {
     return row === undefined ? notFound() : mapVersion(row);
   }
 
-  async listVersions(organizationId: string, templateId: string) {
-    const rows = await listTemplateVersions(this.#database, organizationId, templateId);
-    return rows === undefined ? notFound() : rows.map(mapVersion);
+  async listVersions(organizationId: string, templateId: string, input: { limit: number; cursor?: string | undefined }) {
+    const cursor = input.cursor === undefined ? undefined : this.#cursors.decode(input.cursor, organizationId, "template_versions");
+    const rows = await listTemplateVersions(this.#database, { organizationId, templateId, limit: input.limit,
+      ...(cursor === undefined ? {} : { cursor }) });
+    if (rows === undefined) return notFound();
+    const data = rows.slice(0, input.limit);
+    const last = data.at(-1);
+    return { data: data.map(mapVersion), nextCursor: rows.length > input.limit && last !== undefined
+      ? this.#cursors.encode({ organizationId, resource: "template_versions", createdAt: last.created_at, id: last.id }) : null };
   }
 
   async updateVersion(context: TenantAuthorizationContext, templateId: string, versionId: string,
@@ -204,8 +210,7 @@ export class PhaseFourService {
 
   async previewVersion(organizationId: string, templateId: string, versionId: string) {
     const version = await this.getVersion(organizationId, templateId, versionId);
-    const assets = await listTemplateAssets(this.#database, organizationId, templateId);
-    if (assets === undefined) return notFound();
+    const assets = await findTemplateAssetsByIds(this.#database, organizationId, templateId, version.asset_ids);
     const activeIds = new Set(assets.filter((asset) => asset.status === "ACTIVE").map((asset) => asset.id));
     if (version.asset_ids.some((assetId) => !activeIds.has(assetId))) return validationFailed();
     return { definition: version.definition, bound_elements: bindTemplate(version.definition, previewContext) };
@@ -304,9 +309,15 @@ export class PhaseFourService {
     }
   }
 
-  async listAssets(organizationId: string, templateId: string): Promise<readonly TemplateAsset[]> {
-    const rows = await listTemplateAssets(this.#database, organizationId, templateId);
-    return rows === undefined ? notFound() : rows.map(mapAsset);
+  async listAssets(organizationId: string, templateId: string, input: { limit: number; cursor?: string | undefined }) {
+    const cursor = input.cursor === undefined ? undefined : this.#cursors.decode(input.cursor, organizationId, "template_assets");
+    const rows = await listTemplateAssets(this.#database, { organizationId, templateId, limit: input.limit,
+      ...(cursor === undefined ? {} : { cursor }) });
+    if (rows === undefined) return notFound();
+    const data = rows.slice(0, input.limit);
+    const last = data.at(-1);
+    return { data: data.map(mapAsset), nextCursor: rows.length > input.limit && last !== undefined
+      ? this.#cursors.encode({ organizationId, resource: "template_assets", createdAt: last.created_at, id: last.id }) : null };
   }
 
   async archiveAsset(context: TenantAuthorizationContext, templateId: string, assetId: string, requestId: string) {
