@@ -231,14 +231,14 @@ All template operations require the canonical admin session and `X-Organization-
 - `GET /api/admin/templates/{templateId}` — `template:read`.
 - `PATCH /api/admin/templates/{templateId}` — `template:update`; renames a non-archived template.
 - `POST /api/admin/templates/{templateId}/archive` — `template:update`; archives the template shell without deleting historical versions or assets.
-- `GET /api/admin/templates/{templateId}/versions` — `template:read`.
+- `GET /api/admin/templates/{templateId}/versions` — `template:read`; cursor-paginated with `limit` 1-100 (default 50).
 - `GET /api/admin/templates/{templateId}/versions/{versionId}` — `template:read`.
 - `PATCH /api/admin/templates/{templateId}/versions/{versionId}` — `template:update`; replaces only a `DRAFT` definition and its derived asset links.
 - `DELETE /api/admin/templates/{templateId}/versions/{versionId}` — `template:update`; deletes only a `DRAFT` version.
 - `POST /api/admin/templates/{templateId}/versions/{versionId}/preview` — `template:read`; validates the stored definition and active asset set, then returns a synthetic allowlist-bound data preview. It does not render or return a PDF and does not accept recipient data.
 - `POST /api/admin/templates/{templateId}/versions/{versionId}/archive` — `template:publish`; changes only `PUBLISHED` to `ARCHIVED`.
 - `POST /api/admin/templates/{templateId}/assets` — `template:asset:create`; accepts one private multipart PNG, JPEG, TTF or OTF asset.
-- `GET /api/admin/templates/{templateId}/assets` — `template:read`; returns validated metadata without a storage key or URL.
+- `GET /api/admin/templates/{templateId}/assets` — `template:read`; cursor-paginated with `limit` 1-100 (default 50) and returns validated metadata without a storage key or URL.
 - `GET /api/admin/templates/{templateId}/assets/{assetId}` — `template:read`.
 - `POST /api/admin/templates/{templateId}/assets/{assetId}/archive` — `template:asset:create`; blocked when a published/archived version depends on the asset.
 
@@ -325,11 +325,11 @@ Headers: `Idempotency-Key` required
 }
 ```
 
-An omitted `participant_ids` field means all currently eligible active training participants. An empty array is invalid. The referenced template version must belong to the active organization and be `PUBLISHED`.
+An omitted `participant_ids` field means all currently eligible active training participants. An empty array is invalid. Both explicit and all-eligible resolution are capped at 1,000 participants per generation operation; a larger selection is rejected before issuance rows are materialized. The referenced template version must belong to the active organization and be `PUBLISHED`.
 
 For initial generation, "eligible" means an active `training_participants` relationship with no certificate history for that organization/training/participant. An explicit participant list must contain unique participants and every requested participant must be eligible; otherwise the whole request conflicts rather than partially issuing. The omitted form filters to the eligible set; if no eligible target remains, the request returns a conflict/no-work result. A revoked historical certificate is not silently treated as initial-generation eligibility: a future explicit reissue operation must create a brand-new certificate identity.
 
-At first successful job creation the API transaction locks/validates the training and published template, resolves the exact participant set, computes the versioned request fingerprint, chooses the current server-side renderer revision, creates the job/detail rows, creates one immutable certificate + issuance snapshot + generation item per target, and writes the durable queue intent before commit. The worker consumes those rows and must never re-resolve a later participant population.
+At first successful job creation the API transaction locks/validates the training and published template, resolves the exact participant set, computes the versioned request fingerprint, chooses the current server-side renderer revision, creates the job/detail rows, creates one immutable certificate + issuance snapshot + generation item per target, writes the durable queue intent, and writes one actor/organization/request-correlated `CERTIFICATE_GENERATION_REQUESTED` audit event before commit. Idempotent replay does not duplicate this audit event. The worker consumes those rows and must never re-resolve a later participant population.
 
 Idempotency behavior is request-bound:
 

@@ -37,7 +37,7 @@ test("template manager creates, previews, and publishes an immutable version", a
         meta: { request_id: requestId, next_cursor: null } } }); return;
     }
     if (path.endsWith("/assets")) {
-      await route.fulfill({ json: { data: [], meta: { request_id: requestId } } }); return;
+      await route.fulfill({ json: { data: [], meta: { request_id: requestId, next_cursor: null } } }); return;
     }
     if (path.endsWith("/versions") && method === "POST") {
       expect(route.request().postDataJSON()).toEqual({ definition });
@@ -48,7 +48,7 @@ test("template manager creates, previews, and publishes an immutable version", a
     if (path.endsWith("/versions")) {
       await route.fulfill({ json: { data: versionCreated ? [{ id: versionId, template_id: templateId, version: 1,
         definition, asset_ids: [], status: versionStatus, published_at: versionStatus === "PUBLISHED" ? "2026-08-18T00:00:00.000Z" : null }] : [],
-        meta: { request_id: requestId } } }); return;
+        meta: { request_id: requestId, next_cursor: null } } }); return;
     }
     if (path.endsWith("/preview")) {
       await route.fulfill({ json: { data: { definition, bound_elements: [{ index: 0, value: "Preview Recipient" }] },

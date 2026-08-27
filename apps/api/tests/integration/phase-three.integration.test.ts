@@ -18,8 +18,15 @@ const integrationEnabled = databaseUrl !== undefined && new URL(databaseUrl).pat
 describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration", () => {
   const database = createDatabase({ connectionString: databaseUrl!, maxConnections: 2 });
   const organizationId = randomUUID();
+  const otherOrganizationId = randomUUID();
   const userId = randomUUID();
+  const otherUserId = randomUUID();
   const membershipId = randomUUID();
+  const otherMembershipId = randomUUID();
+  const otherProjectId = randomUUID();
+  const otherTrainingId = randomUUID();
+  const otherParticipantId = randomUUID();
+  const otherJobId = randomUUID();
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
   let app: ReturnType<typeof buildApi>;
@@ -28,9 +35,27 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
   let trainingId = "";
 
   beforeAll(async () => {
-    await database.insertInto("users").values({ id: userId, email: `phase3-${randomUUID()}@example.invalid`, password_hash: "synthetic" }).execute();
-    await database.insertInto("organizations").values({ id: organizationId, name: "Synthetic Phase 3 Tenant" }).execute();
-    await database.insertInto("organization_memberships").values({ id: membershipId, organization_id: organizationId, user_id: userId }).execute();
+    await database.insertInto("users").values([
+      { id: userId, email: `phase3-${randomUUID()}@example.invalid`, password_hash: "synthetic" },
+      { id: otherUserId, email: `phase3-other-${randomUUID()}@example.invalid`, password_hash: "synthetic" }
+    ]).execute();
+    await database.insertInto("organizations").values([
+      { id: organizationId, name: "Synthetic Phase 3 Tenant" },
+      { id: otherOrganizationId, name: "Other Synthetic Phase 3 Tenant" }
+    ]).execute();
+    await database.insertInto("organization_memberships").values([
+      { id: membershipId, organization_id: organizationId, user_id: userId },
+      { id: otherMembershipId, organization_id: otherOrganizationId, user_id: otherUserId }
+    ]).execute();
+    await database.insertInto("projects").values({ id: otherProjectId, organization_id: otherOrganizationId,
+      name: "Foreign Synthetic Project", slug: `foreign-${randomUUID()}` }).execute();
+    await database.insertInto("trainings").values({ id: otherTrainingId, organization_id: otherOrganizationId,
+      project_id: otherProjectId, name: "Foreign Synthetic Training", code: `FOREIGN-${randomUUID()}` }).execute();
+    await database.insertInto("participants").values({ id: otherParticipantId, organization_id: otherOrganizationId,
+      display_name: "Foreign Synthetic Participant", external_reference: "FOREIGN-PRIVATE-REF" }).execute();
+    await database.insertInto("jobs").values({ id: otherJobId, organization_id: otherOrganizationId,
+      job_type: "PARTICIPANT_IMPORT", idempotency_key: `foreign-${randomUUID()}`,
+      requested_by_membership_id: otherMembershipId }).execute();
     const identity: EffectiveIdentity = { user: { id: userId, email: "synthetic@example.invalid" }, systemRoles: [], memberships: [{
       id: membershipId, organizationId, organizationName: "Synthetic Phase 3 Tenant", roles: ["ORG_ADMIN"], permissions: [
         "project:create", "project:read", "project:update", "project:archive", "training:create", "training:read",
@@ -137,6 +162,45 @@ describe.skipIf(!integrationEnabled)("Phase 3 PostgreSQL and Fastify integration
       .set("x-organization-id", organizationId);
     expect(inspected.status).toBe(200);
     expect(JSON.stringify(inspected.body)).not.toContain("source_storage_key");
+  });
+
+  it("rejects participant source bytes at the multipart boundary before private storage", async () => {
+    const objectCount = objects.size;
+    const response = await admin(request(app.server).post(`/api/admin/trainings/${trainingId}/participants/import`))
+      .set("idempotency-key", `oversized-${randomUUID()}`)
+      .attach("file", Buffer.alloc(1_024 * 1_024 + 1, 0x61), { filename: "oversized.csv", contentType: "text/csv" });
+    expect(response.status).toBe(413);
+    expect(response.body.error.code).toBe("UPLOAD_TOO_LARGE");
+    expect(objects.size).toBe(objectCount);
+  });
+
+  it("rejects foreign project, training, participant, and job identifiers without side effects", async () => {
+    for (const path of [
+      `/api/admin/projects/${otherProjectId}`,
+      `/api/admin/trainings/${otherTrainingId}`,
+      `/api/admin/participants/${otherParticipantId}`,
+      `/api/admin/jobs/${otherJobId}`,
+      `/api/admin/participant-imports/${otherJobId}`
+    ]) {
+      expect((await request(app.server).get(path).set("x-organization-id", organizationId)).status).toBe(404);
+    }
+
+    const projectMutation = await admin(request(app.server).patch(`/api/admin/projects/${otherProjectId}`))
+      .send({ name: "Cross-tenant mutation" });
+    const participantMutation = await admin(request(app.server).patch(`/api/admin/participants/${otherParticipantId}`))
+      .send({ display_name: "Cross-tenant mutation" });
+    const nestedConfusion = await admin(request(app.server).post("/api/admin/trainings"))
+      .send({ project_id: otherProjectId, name: "Cross-tenant training", code: `CROSS-${randomUUID()}` });
+    expect(projectMutation.status).toBe(404);
+    expect(participantMutation.status).toBe(404);
+    expect(nestedConfusion.status).toBe(404);
+
+    expect(await database.selectFrom("projects").select("name").where("id", "=", otherProjectId)
+      .executeTakeFirstOrThrow()).toEqual({ name: "Foreign Synthetic Project" });
+    expect(await database.selectFrom("participants").select("display_name").where("id", "=", otherParticipantId)
+      .executeTakeFirstOrThrow()).toEqual({ display_name: "Foreign Synthetic Participant" });
+    expect(await database.selectFrom("trainings").select("id").where("organization_id", "=", organizationId)
+      .where("project_id", "=", otherProjectId).execute()).toHaveLength(0);
   });
 
   it("binds participant-import idempotency keys to the original training and source content under concurrency", async () => {

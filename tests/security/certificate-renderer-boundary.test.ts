@@ -21,8 +21,10 @@ describe("certificate renderer dependency boundary", () => {
       /@aws-sdk\//,
       /\bioredis\b/,
       /\bbullmq\b/,
-      /(?:from\s+|import\()\s*["'](?:node:)?(?:fs(?:\/promises)?|http|https|net|tls|dns|child_process)["']/,
+      /(?:from\s+|import\()\s*["'](?:node:)?(?:fs(?:\/promises)?|path|http|https|net|tls|dns|child_process)["']/,
       /\b(?:fetch|WebSocket|EventSource)\s*\(/,
+      /\beval\s*\(/,
+      /\b(?:new\s+)?Function\s*\(/,
       /\bprocess\.env\b/
     ];
 

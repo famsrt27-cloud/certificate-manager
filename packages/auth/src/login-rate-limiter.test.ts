@@ -27,8 +27,23 @@ describe("distributed login rate limiter", () => {
 
     await expect(limiter.consume("admin@example.invalid", "192.0.2.1")).resolves.toMatchObject({ allowed: true });
     await expect(limiter.consume("admin@example.invalid", "192.0.2.1")).resolves.toMatchObject({ allowed: true });
-    await expect(limiter.consume("admin@example.invalid", "192.0.2.1")).resolves.toMatchObject({ allowed: false });
+    await expect(limiter.consume("admin@example.invalid", "192.0.2.1")).resolves.toMatchObject({ allowed: false, auditSuggested: true });
+    await expect(limiter.consume("other@example.invalid", "192.0.2.1")).resolves.toMatchObject({ allowed: true, auditSuggested: false });
     expect([...redis.counters.keys()].join(" ")).not.toContain("admin@example.invalid");
     expect([...redis.counters.keys()].join(" ")).not.toContain("192.0.2.1");
+  });
+
+  it("suggests one audit when a network enters a limited window and not for rotated accounts afterward", async () => {
+    const limiter = new LoginRateLimiter(new CounterRedis(), {
+      secret: "s".repeat(32), windowSeconds: 900, accountMaximum: 5, networkMaximum: 2
+    });
+    await limiter.consume("first@example.invalid", "192.0.2.1");
+    await limiter.consume("second@example.invalid", "192.0.2.1");
+    await expect(limiter.consume("third@example.invalid", "192.0.2.1"))
+      .resolves.toMatchObject({ allowed: false, auditSuggested: true });
+    for (let index = 0; index < 20; index += 1) {
+      await expect(limiter.consume(`rotated-${index}@example.invalid`, "192.0.2.1"))
+        .resolves.toMatchObject({ allowed: false, auditSuggested: false });
+    }
   });
 });

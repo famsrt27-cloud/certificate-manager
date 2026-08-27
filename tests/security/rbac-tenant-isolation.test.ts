@@ -91,4 +91,31 @@ describe("Phase 2 RBAC abuse cases", () => {
 
     await expect(authorization.requirePermission(forgedRequest)).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
+
+  it("does not treat a tenant role named SUPER_ADMIN as a system role", async () => {
+    const roleCollision = {
+      ...authenticated,
+      identity: {
+        ...identity,
+        memberships: [{
+          ...identity.memberships[0]!,
+          roles: ["SUPER_ADMIN"],
+          permissions: []
+        }]
+      }
+    };
+    const authorization = new OrganizationAuthorizationService(
+      { validateStateChangingRequest: vi.fn() } as unknown as AuthenticationService,
+      { write: vi.fn().mockResolvedValue(undefined) }
+    );
+
+    await expect(authorization.requirePermission({
+      authenticated: roleCollision,
+      organizationId: "00000000-0000-4000-8000-000000000004",
+      permission: "security:read",
+      requestId: "00000000-0000-4000-8000-000000000005",
+      stateChanging: false,
+      allowSuperAdmin: true
+    })).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+  });
 });

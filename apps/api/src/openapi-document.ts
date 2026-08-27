@@ -25,6 +25,8 @@ const organizationParameter = { name: "X-Organization-ID", in: "header", require
   description: "Tenant selector verified against the current server-resolved membership.", schema: { type: "string", format: "uuid" } };
 const idempotencyParameter = { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 } };
 const pathId = (name: string) => ({ name, in: "path", required: true, schema: { type: "string", format: "uuid" } });
+const cursorParameter = { name: "cursor", in: "query", required: false, schema: { type: "string", minLength: 1, maxLength: 2_048 } };
+const limitParameter = { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } };
 const errors = { ...response(400, ErrorResponseSchema), ...response(401, ErrorResponseSchema), ...response(403, ErrorResponseSchema),
   ...response(404, ErrorResponseSchema), ...response(409, ErrorResponseSchema) };
 
@@ -109,7 +111,7 @@ export const openApiDocument = {
       post: writeOperation("template:update", TemplateResponseSchema, [pathId("templateId")])
     },
     "/api/admin/templates/{templateId}/versions": {
-      get: readOperation("template:read", TemplateVersionListResponseSchema, [pathId("templateId")]),
+      get: readOperation("template:read", TemplateVersionListResponseSchema, [pathId("templateId"), cursorParameter, limitParameter]),
       post: writeOperation("template:create", TemplateVersionResponseSchema, [pathId("templateId")], CreateTemplateVersionRequestSchema, 201)
     },
     "/api/admin/templates/{templateId}/versions/{versionId}": {
@@ -128,7 +130,7 @@ export const openApiDocument = {
       post: writeOperation("template:publish", TemplateVersionResponseSchema, [pathId("templateId"), pathId("versionId")])
     },
     "/api/admin/templates/{templateId}/assets": {
-      get: readOperation("template:read", TemplateAssetListResponseSchema, [pathId("templateId")]),
+      get: readOperation("template:read", TemplateAssetListResponseSchema, [pathId("templateId"), cursorParameter, limitParameter]),
       post: {
         ...writeOperation("template:asset:create", TemplateAssetResponseSchema, [pathId("templateId")], undefined, 201),
         requestBody: { required: true, content: { "multipart/form-data": { schema: { type: "object", required: ["file"],

@@ -80,9 +80,20 @@ export const createPrivateObjectStorage = (
       throw new PrivateObjectTooLargeError();
     }
     if (response.Body === undefined) throw new Error("Private object response had no body");
-    const bytes = await response.Body.transformToByteArray();
-    if (bytes.byteLength > maximumBytes) throw new PrivateObjectTooLargeError();
-    return bytes;
+    const body = response.Body as AsyncIterable<Uint8Array | string> & { destroy?: () => void };
+    if (body[Symbol.asyncIterator] === undefined) throw new Error("Private object response body was not streamable");
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    for await (const chunk of body) {
+      const bytes = typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk);
+      totalBytes += bytes.byteLength;
+      if (totalBytes > maximumBytes) {
+        body.destroy?.();
+        throw new PrivateObjectTooLargeError();
+      }
+      chunks.push(bytes);
+    }
+    return Buffer.concat(chunks, totalBytes);
   },
 
   async delete(key) {

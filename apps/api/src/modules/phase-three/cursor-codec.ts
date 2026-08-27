@@ -7,10 +7,13 @@ import { ApplicationError } from "../../errors/application-error.js";
 const CursorPayloadSchema = z.object({
   version: z.literal(1),
   organization_id: z.uuid(),
-  resource: z.enum(["projects", "trainings", "participants", "participant_import_rows", "templates"]),
+  resource: z.enum(["projects", "trainings", "participants", "participant_import_rows", "templates",
+    "template_versions", "template_assets"]),
   created_at: z.iso.datetime({ offset: true }),
   id: z.uuid()
 }).strict();
+const CURSOR_MAX_BYTES = 2_048;
+const CANONICAL_BASE64URL = /^[A-Za-z0-9_-]+$/;
 
 export type CursorResource = z.infer<typeof CursorPayloadSchema>["resource"];
 
@@ -37,6 +40,9 @@ export class CursorCodec {
 
   decode(cursor: string, organizationId: string, resource: CursorResource): { createdAt: Date; id: string } {
     try {
+      if (Buffer.byteLength(cursor, "utf8") > CURSOR_MAX_BYTES || !CANONICAL_BASE64URL.test(cursor)) {
+        throw new Error("cursor encoding invalid");
+      }
       const bytes = Buffer.from(cursor, "base64url");
       if (bytes.length < 29) throw new Error("cursor too short");
       const decipher = createDecipheriv("aes-256-gcm", this.#key, bytes.subarray(0, 12));

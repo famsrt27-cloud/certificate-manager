@@ -14,6 +14,7 @@ export {
   type ValidatedParticipantImportRow
 } from "./participant-import-policy.js";
 export {
+  CERTIFICATE_GENERATION_MAX_PARTICIPANTS,
   CERTIFICATE_GENERATION_REQUEST_FINGERPRINT_VERSION,
   CERTIFICATE_RENDERER_REVISION_PATTERN,
   canPlanCertificateIssue,

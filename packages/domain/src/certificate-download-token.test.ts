@@ -17,6 +17,10 @@ const sign = (header: unknown, payload: unknown, key = activeKey): string => {
   const signed = `${encode(header)}.${encode(payload)}`;
   return `${signed}.${createHmac("sha256", key).update(signed).digest("base64url")}`;
 };
+const signSegments = (header: string, payload: string, key = activeKey): string => {
+  const signed = `${header}.${payload}`;
+  return `${signed}.${createHmac("sha256", key).update(signed).digest("base64url")}`;
+};
 const validHeader = { alg: "HS256", kid: "active-key", typ: "CDT" };
 const validPayload = { v: 1, typ: "certificate-download", aud: "public-certificate-download", pcid: publicIdentifier,
   iat: 1_787_702_400, exp: 1_787_702_460, jti: tokenId };
@@ -103,13 +107,24 @@ describe("certificate download token", () => {
 
   it.each([
     { typ: "certificate-verification" }, { aud: "another-audience" }, { v: 2 }, { pcid: "A".repeat(32) },
-    { iat: -1 }, { exp: validPayload.iat }, { exp: validPayload.iat + 61 }, { jti: "short" }
+    { pcid: "00000000-0000-4000-8000-000000000001" }, { iat: -1 }, { exp: validPayload.iat },
+    { exp: validPayload.iat - 1 }, { exp: validPayload.iat + 61 }, { jti: "short" }, { unexpected: true }
   ])("rejects invalid payload claims %#", (overrides) => expectInvalid(sign(validHeader, { ...validPayload, ...overrides })));
+
+  it.each([
+    { ...validHeader, typ: "JWT" },
+    { ...validHeader, kid: "bad kid" },
+    { ...validHeader, kid: "" }
+  ])("rejects invalid protected header claims %#", (header) => expectInvalid(sign(header, validPayload)));
 
   it("rejects malformed, unknown-key, tampered, and oversized tokens", () => {
     for (const token of ["", "one.two", "one.two.three.four", "*.e30.signature",
       sign({ ...validHeader, kid: "unknown-key" }, validPayload),
       tamperSignature(sign(validHeader, { ...validPayload, pcid: "f".repeat(32) })),
+      signSegments(encode(validHeader), Buffer.from(
+        `{"v":1,"typ":"certificate-download","aud":"public-certificate-download","pcid":"${publicIdentifier}","iat":${validPayload.iat},"exp":${validPayload.exp},"jti":"${tokenId}","jti":"${tokenId}"}`
+      ).toString("base64url")),
+      `${encode(validHeader)}=.${encode(validPayload)}.signature`,
       "a".repeat(CERTIFICATE_DOWNLOAD_TOKEN_MAX_BYTES + 1)]) expectInvalid(token);
   });
 });

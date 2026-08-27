@@ -144,4 +144,13 @@ describe.skipIf(!integrationEnabled)("PostgreSQL and Redis authentication integr
       granted_by_user_id: userId
     }).execute()).rejects.toThrow();
   });
+
+  it("lets PostgreSQL reject SUPER_ADMIN as an organization membership role", async () => {
+    await expect(database.insertInto("membership_roles").values({
+      membership_id: membershipId,
+      organization_id: organizationId,
+      role: "SUPER_ADMIN",
+      granted_by_user_id: userId
+    }).execute()).rejects.toThrow();
+  });
 });

@@ -18,7 +18,8 @@ export const registerAdminPhaseFiveRoutes = (app: FastifyInstance, options: Admi
     const context = await options.authorization.requirePermission({ authenticated, organizationId, permission: "certificate:generate", requestId: request.id, stateChanging: true,
       ...(typeof request.headers.origin === "string" ? { origin: request.headers.origin } : {}), ...(typeof request.headers["x-csrf-token"] === "string" ? { csrfToken: request.headers["x-csrf-token"] } : {}) });
     const { trainingId } = parse(Params, request.params); const key = parse(IdempotencyKeySchema, request.headers["idempotency-key"]);
-    const data = await options.service.generate(context, trainingId, key, parse(GenerateCertificatesRequestSchema, request.body));
+    const data = await options.service.generate(context, trainingId, key, request.id,
+      parse(GenerateCertificatesRequestSchema, request.body));
     return reply.status(202).header("cache-control", "no-store").send(CertificateGenerationQueuedResponseSchema.parse({ data, meta: { request_id: request.id } }));
   });
 };

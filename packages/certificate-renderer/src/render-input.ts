@@ -10,6 +10,7 @@ import { z } from "zod";
 
 export const CERTIFICATE_RENDER_INPUT_VERSION = 1 as const;
 export const CERTIFICATE_RENDERER_REVISION = "pdfkit-qrcode-v1" as const;
+export const MAX_VERIFICATION_URL_BYTES = 2_331;
 
 const mimeSchema = z.enum(["image/png", "image/jpeg", "font/ttf", "font/otf"]);
 const assetKindSchema = z.enum(["IMAGE", "FONT"]);
@@ -24,13 +25,14 @@ const issuedAtSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) =>
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }, { message: "issuedAt must be a real UTC calendar date" });
 
-const verificationUrlSchema = z.string().max(4_096).refine((value) => {
+const verificationUrlSchema = z.string().max(MAX_VERIFICATION_URL_BYTES).refine((value) => {
   try {
     const parsed = new URL(value);
     return (parsed.protocol === "https:" || parsed.protocol === "http:")
       && parsed.username.length === 0
       && parsed.password.length === 0
-      && parsed.search.length === 0;
+      && parsed.search.length === 0
+      && Buffer.byteLength(value, "utf8") <= MAX_VERIFICATION_URL_BYTES;
   } catch {
     return false;
   }

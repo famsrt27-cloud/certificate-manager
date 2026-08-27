@@ -229,6 +229,21 @@ describe.skipIf(!enabled)("certificate generation worker PostgreSQL integration"
     expect(storage.inputs).toHaveLength(0);
   });
 
+  it("contains invalid renderer output before storage or AVAILABLE publication", async () => {
+    const planned = await plan("Invalid Renderer Output Recipient");
+    const storage = new MemoryStorage();
+    await expect(processor(storage, { render: async () => new Uint8Array(Buffer.from("not-a-pdf")) })
+      .process({ version: 1, job_id: planned.jobId, organization_id: organizationId }))
+      .rejects.toMatchObject({ code: "CERTIFICATE_GENERATION_FAILED" });
+    expect(storage.inputs).toHaveLength(0);
+    expect(await database.selectFrom("certificates").select(["status", "pdf_storage_key", "pdf_content_sha256", "pdf_size_bytes"])
+      .where("id", "=", planned.certificate_id).executeTakeFirstOrThrow()).toEqual({
+      status: "GENERATING", pdf_storage_key: null, pdf_content_sha256: null, pdf_size_bytes: null
+    });
+    expect((await database.selectFrom("certificate_generation_items").select("status")
+      .where("id", "=", planned.id).executeTakeFirstOrThrow()).status).toBe("FAILED");
+  });
+
   it("leaves uploaded objects on the durable cleanup path when publication fails", async () => {
     const planned = await plan("Cleanup Recipient");
     const storage = new MemoryStorage();

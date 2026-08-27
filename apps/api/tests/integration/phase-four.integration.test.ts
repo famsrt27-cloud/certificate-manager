@@ -333,9 +333,97 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(persisted.published_at).toBeNull();
   });
 
-  it("enforces tenant isolation even when the actor is a member of both tenants", async () => {
-    const response = await request(app.server).get(`/api/admin/templates/${templateId}`).set("x-organization-id", otherOrganizationId);
-    expect(response.status).toBe(404);
+  it("enforces nested template, version, and asset isolation even when the actor belongs to both tenants", async () => {
+    const foreignTemplate = await admin(request(app.server).post("/api/admin/templates"), otherOrganizationId)
+      .send({ name: "Foreign Secure Template" });
+    expect(foreignTemplate.status).toBe(201);
+    const foreignTemplateId = foreignTemplate.body.data.id as string;
+    const foreignAsset = await admin(request(app.server).post(`/api/admin/templates/${foreignTemplateId}/assets`), otherOrganizationId)
+      .attach("file", onePixelPng, { filename: "foreign-logo.png", contentType: "image/png" });
+    expect(foreignAsset.status).toBe(201);
+    const foreignVersion = await admin(request(app.server).post(`/api/admin/templates/${foreignTemplateId}/versions`), otherOrganizationId)
+      .send({ definition: { format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [] } });
+    expect(foreignVersion.status).toBe(201);
+
+    for (const path of [
+      `/api/admin/templates/${foreignTemplateId}`,
+      `/api/admin/templates/${foreignTemplateId}/versions/${foreignVersion.body.data.id}`,
+      `/api/admin/templates/${foreignTemplateId}/assets/${foreignAsset.body.data.id}`
+    ]) {
+      expect((await request(app.server).get(path).set("x-organization-id", organizationId)).status).toBe(404);
+    }
+    for (const path of [
+      `/api/admin/templates/${templateId}`,
+      `/api/admin/templates/${templateId}/versions/${versionId}`,
+      `/api/admin/templates/${templateId}/assets/${assetId}`
+    ]) {
+      expect((await request(app.server).get(path).set("x-organization-id", otherOrganizationId)).status).toBe(404);
+    }
+
+    const mutation = await admin(request(app.server).patch(`/api/admin/templates/${foreignTemplateId}`))
+      .send({ name: "Cross-tenant mutation" });
+    expect(mutation.status).toBe(404);
+    const unchanged = await request(app.server).get(`/api/admin/templates/${foreignTemplateId}`)
+      .set("x-organization-id", otherOrganizationId);
+    expect(unchanged.status).toBe(200);
+    expect(unchanged.body.data.name).toBe("Foreign Secure Template");
+  });
+
+  it("paginates version and asset lists with scoped opaque cursors", async () => {
+    const definition = { format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+      { type: "text", x: 10, y: 10, width: 300, height: 40,
+        font: { family: "Noto Sans Thai", size: 24 }, binding: "recipient.display_name" }
+    ] };
+    await admin(request(app.server).post(`/api/admin/templates/${templateId}/versions`)).send({ definition });
+    await admin(request(app.server).post(`/api/admin/templates/${templateId}/versions`)).send({ definition });
+    await admin(request(app.server).post(`/api/admin/templates/${templateId}/assets`))
+      .attach("file", onePixelPng, { filename: "page-a.png", contentType: "image/png" });
+    await admin(request(app.server).post(`/api/admin/templates/${templateId}/assets`))
+      .attach("file", onePixelPng, { filename: "page-b.png", contentType: "image/png" });
+
+    const versionsFirst = await admin(request(app.server)
+      .get(`/api/admin/templates/${templateId}/versions?limit=1`));
+    expect(versionsFirst.status).toBe(200);
+    expect(versionsFirst.body.data).toHaveLength(1);
+    expect(versionsFirst.body.meta.next_cursor).toEqual(expect.any(String));
+    const versionsSecond = await admin(request(app.server)
+      .get(`/api/admin/templates/${templateId}/versions?limit=1&cursor=${encodeURIComponent(versionsFirst.body.meta.next_cursor)}`));
+    expect(versionsSecond.status).toBe(200);
+    expect(versionsSecond.body.data[0].id).not.toBe(versionsFirst.body.data[0].id);
+
+    const assetsFirst = await admin(request(app.server)
+      .get(`/api/admin/templates/${templateId}/assets?limit=1`));
+    expect(assetsFirst.status).toBe(200);
+    expect(assetsFirst.body.data).toHaveLength(1);
+    expect(assetsFirst.body.meta.next_cursor).toEqual(expect.any(String));
+    expect((await admin(request(app.server)
+      .get(`/api/admin/templates/${templateId}/assets?cursor=${encodeURIComponent(versionsFirst.body.meta.next_cursor)}`))).status).toBe(400);
+    expect((await admin(request(app.server)
+      .get(`/api/admin/templates/${templateId}/assets?cursor=${"a".repeat(2_049)}`))).status).toBe(400);
+  });
+
+  it("rejects multipart field, duplicate-file, missing-file, and malformed-boundary abuse without storing objects", async () => {
+    const before = objects.size;
+    const endpoint = `/api/admin/templates/${templateId}/assets`;
+    expect((await admin(request(app.server).post(endpoint)).field("metadata", "unexpected")
+      .attach("file", onePixelPng, { filename: "field.png", contentType: "image/png" })).status).toBe(400);
+    expect((await admin(request(app.server).post(endpoint))
+      .attach("file", onePixelPng, { filename: "first.png", contentType: "image/png" })
+      .attach("file", onePixelPng, { filename: "second.png", contentType: "image/png" })).status).toBe(400);
+    expect((await admin(request(app.server).post(endpoint)).set("content-type", "multipart/form-data; boundary=empty")
+      .send("--empty--\r\n")).status).toBe(400);
+    expect((await admin(request(app.server).post(endpoint)).set("content-type", "multipart/form-data; boundary=broken")
+      .send("not-a-valid-multipart-body")).status).toBe(400);
+    expect(objects.size).toBe(before);
+  });
+
+  it("rejects template asset bytes at the multipart boundary before private storage", async () => {
+    const objectCount = objects.size;
+    const response = await admin(request(app.server).post(`/api/admin/templates/${templateId}/assets`))
+      .attach("file", Buffer.alloc(1_024 * 1_024 + 1, 0x61), { filename: "oversized.png", contentType: "image/png" });
+    expect(response.status).toBe(413);
+    expect(response.body.error.code).toBe("UPLOAD_TOO_LARGE");
+    expect(objects.size).toBe(objectCount);
   });
 
   it("enforces published definition, asset-link, and asset-content immutability in PostgreSQL", async () => {

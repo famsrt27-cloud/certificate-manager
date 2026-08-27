@@ -14,7 +14,7 @@ export interface PublicVerificationRouteOptions {
 }
 
 export const registerPublicVerificationRoutes = (app: FastifyInstance, options: PublicVerificationRouteOptions): void => {
-  app.post("/api/public/verify", async (request, reply) => {
+  app.post("/api/public/verify", { bodyLimit: 4_096 }, async (request, reply) => {
     const rateLimit = await options.rateLimiter.consume(request.ip);
     if (!rateLimit.allowed) {
       return reply.status(429).header("retry-after", rateLimit.retryAfterSeconds)

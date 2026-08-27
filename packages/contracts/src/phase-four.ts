@@ -11,6 +11,10 @@ export { TemplateDefinitionSchema } from "@certificate-platform/template-engine"
 
 const ResourceNameSchema = z.string().trim().min(1).max(200);
 const CursorSchema = z.string().min(1).max(2_048);
+export const TemplateChildListQuerySchema = z.object({
+  cursor: CursorSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50)
+}).strict();
 const HexSha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
 export const TemplateVersionStatusSchema = z.enum(["DRAFT", "PUBLISHED", "ARCHIVED"]);
 export const TemplateAssetStatusSchema = z.enum(["QUARANTINED", "ACTIVE", "REJECTED", "ARCHIVED"]);
@@ -37,7 +41,8 @@ export const TemplateVersionSchema = z.object({
   published_at: z.iso.datetime().nullable()
 });
 export const TemplateVersionResponseSchema = z.object({ data: TemplateVersionSchema, meta: RequestMetaSchema });
-export const TemplateVersionListResponseSchema = z.object({ data: z.array(TemplateVersionSchema), meta: RequestMetaSchema });
+export const TemplateVersionListResponseSchema = z.object({ data: z.array(TemplateVersionSchema),
+  meta: RequestMetaSchema.extend({ next_cursor: CursorSchema.nullable() }) });
 export const DeleteDraftVersionResponseSchema = z.object({ data: z.object({ deleted: z.literal(true) }), meta: RequestMetaSchema });
 
 export const TemplateAssetSchema = z.object({
@@ -48,7 +53,8 @@ export const TemplateAssetSchema = z.object({
   status: TemplateAssetStatusSchema
 });
 export const TemplateAssetResponseSchema = z.object({ data: TemplateAssetSchema, meta: RequestMetaSchema });
-export const TemplateAssetListResponseSchema = z.object({ data: z.array(TemplateAssetSchema), meta: RequestMetaSchema });
+export const TemplateAssetListResponseSchema = z.object({ data: z.array(TemplateAssetSchema),
+  meta: RequestMetaSchema.extend({ next_cursor: CursorSchema.nullable() }) });
 
 export const TemplatePreviewResponseSchema = z.object({
   data: z.object({

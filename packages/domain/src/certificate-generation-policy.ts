@@ -4,6 +4,8 @@ export const CERTIFICATE_GENERATION_REQUEST_FINGERPRINT_VERSION = 1 as const;
 export const CERTIFICATE_RENDERER_REVISION_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 export type CertificateGenerationSelectionMode = "ALL_ELIGIBLE" | "EXPLICIT";
+
+export const CERTIFICATE_GENERATION_MAX_PARTICIPANTS = 1_000;
 export type CertificateIssueOperation = "INITIAL_ISSUE" | "REISSUE";
 export type CertificateLifecycleStatus =
   | "DRAFT"

@@ -30,4 +30,21 @@ describe("private S3-compatible storage", () => {
 
     await expect(storage.get("private-key", 100)).rejects.toBeInstanceOf(PrivateObjectTooLargeError);
   });
+
+  it("stops an undeclared stream as soon as its cumulative bytes cross the bound", async () => {
+    const body = Readable.from([Buffer.alloc(60), Buffer.alloc(60), Buffer.alloc(60)]);
+    const destroy = vi.spyOn(body, "destroy");
+    const send = vi.fn().mockResolvedValue({ Body: body });
+    const storage = createPrivateObjectStorage({ send } as never, "private-imports");
+
+    await expect(storage.get("private-key", 100)).rejects.toBeInstanceOf(PrivateObjectTooLargeError);
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it("returns an undeclared stream when the exact cumulative bound is respected", async () => {
+    const send = vi.fn().mockResolvedValue({ Body: Readable.from([Buffer.from("abc"), Buffer.from("def")]) });
+    const storage = createPrivateObjectStorage({ send } as never, "private-imports");
+
+    await expect(storage.get("private-key", 6)).resolves.toEqual(Buffer.from("abcdef"));
+  });
 });

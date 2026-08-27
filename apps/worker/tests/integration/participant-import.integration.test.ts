@@ -200,6 +200,38 @@ describe.skipIf(!integrationEnabled)("participant import worker PostgreSQL integ
     expect(completedMetadata.source_cleanup_last_error_code).toBeNull();
   });
 
+  it("terminally rejects malicious source content without staging or partial participants and schedules source cleanup", async () => {
+    const maliciousJobId = randomUUID();
+    const maliciousStorageKey = `participant-imports/${organizationId}/${maliciousJobId}/malicious.csv`;
+    const maliciousBytes = Buffer.from("display_name\n\"unclosed");
+    objects.set(maliciousStorageKey, new Uint8Array(maliciousBytes));
+    await createParticipantImport(database, {
+      jobId: maliciousJobId, organizationId, trainingId, idempotencyKey: `malicious-${randomUUID()}`,
+      requestedByMembershipId: membershipId, sourceStorageKey: maliciousStorageKey, originalFilename: "malicious.csv",
+      contentSha256: createHash("sha256").update(maliciousBytes).digest(), detectedMimeType: "text/csv",
+      sizeBytes: maliciousBytes.byteLength
+    });
+
+    const participantsBefore = await database.selectFrom("participants").select(({ fn }) => fn.countAll<number>().as("count"))
+      .where("organization_id", "=", organizationId).executeTakeFirstOrThrow();
+    await processor.process({ version: 1, job_id: maliciousJobId, organization_id: organizationId, operation: "VALIDATE" });
+    const job = await database.selectFrom("jobs").select(["status", "last_error_code"])
+      .where("id", "=", maliciousJobId).executeTakeFirstOrThrow();
+    const detail = await database.selectFrom("participant_import_jobs").select("source_cleanup_requested_at")
+      .where("job_id", "=", maliciousJobId).executeTakeFirstOrThrow();
+    const staged = await database.selectFrom("participant_import_rows").select("id")
+      .where("job_id", "=", maliciousJobId).execute();
+    const participantsAfter = await database.selectFrom("participants").select(({ fn }) => fn.countAll<number>().as("count"))
+      .where("organization_id", "=", organizationId).executeTakeFirstOrThrow();
+
+    expect(job).toEqual({ status: "FAILED", last_error_code: "IMPORT_FILE_INVALID" });
+    expect(detail.source_cleanup_requested_at).toBeInstanceOf(Date);
+    expect(staged).toHaveLength(0);
+    expect(participantsAfter.count).toBe(participantsBefore.count);
+    expect(await sourceCleanup.runOnce()).toEqual({ claimed: 1, deleted: 1, failed: 0 });
+    expect(objects.has(maliciousStorageKey)).toBe(false);
+  });
+
   it("does not resolve an import job through a different tenant scope", async () => {
     await expect(processor.process({ version: 1, job_id: jobId, organization_id: randomUUID(), operation: "CONFIRM" }))
       .rejects.toThrow("not found");

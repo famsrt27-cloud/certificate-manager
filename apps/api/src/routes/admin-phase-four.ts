@@ -1,7 +1,7 @@
 import {
   AdminOrganizationIdSchema, CreateTemplateRequestSchema, CreateTemplateVersionRequestSchema,
   DeleteDraftVersionResponseSchema, TemplateAssetListResponseSchema, TemplateAssetResponseSchema,
-  TemplateListQuerySchema, TemplateListResponseSchema, TemplatePreviewResponseSchema, TemplateResponseSchema,
+  TemplateChildListQuerySchema, TemplateListQuerySchema, TemplateListResponseSchema, TemplatePreviewResponseSchema, TemplateResponseSchema,
   TemplateVersionListResponseSchema, TemplateVersionResponseSchema, UpdateTemplateRequestSchema,
   UpdateTemplateVersionRequestSchema
 } from "@certificate-platform/contracts";
@@ -70,6 +70,9 @@ const readAssetFile = async (request: FastifyRequest, maximumBytes: number) => {
     }
   } catch (error) {
     if (error instanceof ApplicationError) throw error;
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "FST_REQ_FILE_TOO_LARGE") {
+      throw new ApplicationError("UPLOAD_TOO_LARGE", "The uploaded file is too large.", 413);
+    }
     throw new ApplicationError("UPLOAD_REJECTED", "The uploaded file could not be accepted.", 400);
   }
   if (file === undefined) return validationFailed();
@@ -116,8 +119,10 @@ export const registerAdminPhaseFourRoutes = (app: FastifyInstance, options: Admi
   app.get("/api/admin/templates/:templateId/versions", async (request, reply) => {
     const context = await authorize(request, options, "template:read", false);
     const { templateId } = parse(TemplateParamsSchema, request.params);
-    const data = await options.service.listVersions(context.organizationId, templateId);
-    return reply.headers(noStore).send(TemplateVersionListResponseSchema.parse({ data, meta: { request_id: request.id } }));
+    const page = await options.service.listVersions(context.organizationId, templateId,
+      parse(TemplateChildListQuerySchema, request.query));
+    return reply.headers(noStore).send(TemplateVersionListResponseSchema.parse({ data: page.data,
+      meta: { request_id: request.id, next_cursor: page.nextCursor } }));
   });
   app.get("/api/admin/templates/:templateId/versions/:versionId", async (request, reply) => {
     const context = await authorize(request, options, "template:read", false);
@@ -168,8 +173,10 @@ export const registerAdminPhaseFourRoutes = (app: FastifyInstance, options: Admi
   app.get("/api/admin/templates/:templateId/assets", async (request, reply) => {
     const context = await authorize(request, options, "template:read", false);
     const { templateId } = parse(TemplateParamsSchema, request.params);
-    const data = await options.service.listAssets(context.organizationId, templateId);
-    return reply.headers(noStore).send(TemplateAssetListResponseSchema.parse({ data, meta: { request_id: request.id } }));
+    const page = await options.service.listAssets(context.organizationId, templateId,
+      parse(TemplateChildListQuerySchema, request.query));
+    return reply.headers(noStore).send(TemplateAssetListResponseSchema.parse({ data: page.data,
+      meta: { request_id: request.id, next_cursor: page.nextCursor } }));
   });
   app.get("/api/admin/templates/:templateId/assets/:assetId", async (request, reply) => {
     const context = await authorize(request, options, "template:read", false);

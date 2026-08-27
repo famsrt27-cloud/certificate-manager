@@ -13,6 +13,7 @@ export interface LoginRateLimitConfiguration {
 export interface LoginRateLimitResult {
   readonly allowed: boolean;
   readonly retryAfterSeconds: number;
+  readonly auditSuggested: boolean;
 }
 
 export class LoginRateLimiter {
@@ -33,7 +34,10 @@ export class LoginRateLimiter {
       && network.count <= this.#configuration.networkMaximum;
     return {
       allowed,
-      retryAfterSeconds: allowed ? 0 : Math.max(account.ttlSeconds, network.ttlSeconds, 1)
+      retryAfterSeconds: allowed ? 0 : Math.max(account.ttlSeconds, network.ttlSeconds, 1),
+      auditSuggested: !allowed && (network.count === this.#configuration.networkMaximum + 1
+        || (network.count <= this.#configuration.networkMaximum
+          && account.count === this.#configuration.accountMaximum + 1))
     };
   }
 

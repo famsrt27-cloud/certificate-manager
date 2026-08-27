@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CERTIFICATE_RENDERER_REVISION,
+  MAX_VERIFICATION_URL_BYTES,
   prepareCertificateRenderInput
 } from "./render-input.js";
 
@@ -100,6 +101,13 @@ describe("certificate renderer input boundary", () => {
     expect(() => prepareCertificateRenderInput(input, { maxTotalAssetBytes: 1_024 })).toThrow();
   });
 
+  it("rejects wrong input versions and unknown nested render fields", () => {
+    expect(() => prepareCertificateRenderInput({ ...baseInput(), inputVersion: 2 }, { maxTotalAssetBytes: 1_024 })).toThrow();
+    const extraBinding = baseInput() as TestRenderRequest & { bindings: TestRenderRequest["bindings"] & { storageKey?: string } };
+    extraBinding.bindings.storageKey = "private/object";
+    expect(() => prepareCertificateRenderInput(extraBinding, { maxTotalAssetBytes: 1_024 })).toThrow();
+  });
+
   it("rejects infrastructure or secret fields at the strict boundary", () => {
     expect(() => prepareCertificateRenderInput({
       ...baseInput(),
@@ -117,6 +125,29 @@ describe("certificate renderer input boundary", () => {
     const queryToken = baseInput();
     queryToken.bindings.verificationUrl = "https://verify.example.invalid/verify?token=forbidden";
     expect(() => prepareCertificateRenderInput(queryToken, { maxTotalAssetBytes: 1_024 })).toThrow();
+  });
+
+  it.each([
+    "file:///secret", "data:text/plain,inert", "javascript:inert", "ftp://localhost/file", "https://user@verify.invalid/#token",
+    "https://user:pass@verify.invalid/#token", "//verify.invalid/path", "../../secret", "http://[invalid"
+  ])("rejects a verification URL outside the absolute HTTP(S) data contract", (verificationUrl) => {
+    const input = baseInput();
+    input.bindings.verificationUrl = verificationUrl;
+    expect(() => prepareCertificateRenderInput(input, { maxTotalAssetBytes: 1_024 })).toThrow();
+  });
+
+  it("bounds verification URLs by UTF-8 bytes at the QR encoder's guaranteed byte-mode capacity", () => {
+    const prefix = "https://verify.invalid/#";
+    const atLimit = baseInput();
+    atLimit.bindings.verificationUrl = prefix + "a".repeat(MAX_VERIFICATION_URL_BYTES - Buffer.byteLength(prefix));
+    expect(() => prepareCertificateRenderInput(atLimit, { maxTotalAssetBytes: 1_024 })).not.toThrow();
+    const asciiOver = baseInput();
+    asciiOver.bindings.verificationUrl = `${atLimit.bindings.verificationUrl}a`;
+    expect(() => prepareCertificateRenderInput(asciiOver, { maxTotalAssetBytes: 1_024 })).toThrow();
+    const multibyteOver = baseInput();
+    multibyteOver.bindings.verificationUrl = prefix + "ก".repeat(800);
+    expect(multibyteOver.bindings.verificationUrl.length).toBeLessThan(MAX_VERIFICATION_URL_BYTES);
+    expect(() => prepareCertificateRenderInput(multibyteOver, { maxTotalAssetBytes: 1_024 })).toThrow();
   });
 
   it("requires exactly the template-referenced asset set and verifies SHA-256 identity", () => {
@@ -178,6 +209,30 @@ describe("certificate renderer input boundary", () => {
     overBudget.templateDefinition.elements = [imageElement(assetId)];
     overBudget.assets = [validAsset];
     expect(() => prepareCertificateRenderInput(overBudget, { maxTotalAssetBytes: 2 })).toThrow();
+
+    const exactBudget = baseInput();
+    exactBudget.templateDefinition.elements = [imageElement(assetId)];
+    exactBudget.assets = [validAsset];
+    expect(() => prepareCertificateRenderInput(exactBudget, { maxTotalAssetBytes: bytes.byteLength })).not.toThrow();
+    expect(() => prepareCertificateRenderInput(exactBudget, { maxTotalAssetBytes: bytes.byteLength - 1 })).toThrow();
+  });
+
+  it("rejects empty assets, malformed hashes, and unknown asset fields", () => {
+    const assetId = randomUUID();
+    const input = baseInput();
+    input.templateDefinition.elements = [imageElement(assetId)];
+    input.assets = [{ ...imageAsset(assetId, Uint8Array.from([1])), bytes: new Uint8Array() }];
+    expect(() => prepareCertificateRenderInput(input, { maxTotalAssetBytes: 1_024 })).toThrow();
+
+    const malformedHash = baseInput();
+    malformedHash.templateDefinition.elements = [imageElement(assetId)];
+    malformedHash.assets = [{ ...imageAsset(assetId, Uint8Array.from([1])), contentSha256: new Uint8Array(31) }];
+    expect(() => prepareCertificateRenderInput(malformedHash, { maxTotalAssetBytes: 1_024 })).toThrow();
+
+    const extraField = baseInput();
+    extraField.templateDefinition.elements = [imageElement(assetId)];
+    extraField.assets = [{ ...imageAsset(assetId, Uint8Array.from([1])), url: "http://169.254.169.254" } as TestAsset];
+    expect(() => prepareCertificateRenderInput(extraField, { maxTotalAssetBytes: 1_024 })).toThrow();
   });
 
   it("copies asset identity and bytes so caller mutation cannot alter prepared input", () => {
