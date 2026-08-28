@@ -1,6 +1,11 @@
 export { checkDatabase, closeDatabase, createDatabase } from "./database.js";
 export type { DatabaseClient, DatabaseConnectionConfig } from "./database.js";
 export {
+  bootstrapDevelopmentAdmin,
+  type DevelopmentAdminBootstrapInput,
+  type DevelopmentAdminBootstrapResult
+} from "./development-admin-bootstrap.js";
+export {
   findAuthenticationUser,
   insertAuditRecord,
   loadEffectiveIdentity,
