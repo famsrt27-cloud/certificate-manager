@@ -36,8 +36,41 @@ test("admin can use the login, session and logout UI without browser-stored sess
   await page.getByRole("button", { name: "เข้าสู่ระบบ" }).click();
 
   await expect(page).toHaveURL(/\/admin$/);
-  await expect(page.getByRole("heading", { name: "สิทธิ์การเข้าถึงองค์กร" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ภาพรวมระบบ" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Synthetic Organization" })).toBeVisible();
   await page.getByRole("button", { name: "ออกจากระบบ" }).click();
   await expect(page).toHaveURL(/\/admin\/login$/);
 });
+
+test("admin shell exposes an accessible mobile navigation drawer", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.route("**/api/admin/auth/session", (route) => route.fulfill({ json: authenticationResponse }));
+
+  await page.goto("/admin");
+  await expect(page.getByRole("heading", { name: "ภาพรวมระบบ" })).toBeVisible();
+
+  const menuButton = page.getByRole("button", { name: "เปิดเมนู" });
+  await expect(menuButton).toHaveAttribute("aria-expanded", "false");
+  await menuButton.click();
+  await expect(menuButton).toHaveAttribute("aria-expanded", "true");
+  const mobileNavigation = page.locator("#admin-mobile-navigation");
+  await expect(mobileNavigation.getByRole("navigation", { name: "เมนูหลัก" })).toBeVisible();
+  await expect(mobileNavigation.getByRole("button", { name: /โครงการ/ })).toBeDisabled();
+  await mobileNavigation.getByRole("button", { name: "ปิดเมนู" }).click();
+  await expect(menuButton).toHaveAttribute("aria-expanded", "false");
+});
+
+for (const width of [375, 768, 1280, 1440]) {
+  test(`login and admin shell avoid horizontal overflow at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/admin/auth/session", (route) => route.fulfill({ json: authenticationResponse }));
+
+    await page.goto("/admin/login");
+    await expect(page.getByRole("heading", { name: "เข้าสู่ระบบผู้ดูแล" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+
+    await page.goto("/admin");
+    await expect(page.getByRole("heading", { name: "ภาพรวมระบบ" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  });
+}

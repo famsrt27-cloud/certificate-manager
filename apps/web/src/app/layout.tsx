@@ -3,8 +3,11 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Certificate Platform",
-  description: "Certificate management platform authentication and authorization foundation",
+  title: {
+    default: "Certificate Management Platform",
+    template: "%s | Certificate Management Platform"
+  },
+  description: "ระบบบริหารจัดการโครงการ การอบรม ผู้เข้าร่วม และใบประกาศนียบัตร",
   robots: {
     index: false,
     follow: false,
