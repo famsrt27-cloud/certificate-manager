@@ -11,6 +11,7 @@ import { registerAdminAuthRoutes, type AdminAuthRouteOptions } from "./routes/ad
 import { registerAdminPhaseThreeRoutes, type AdminPhaseThreeRouteOptions } from "./routes/admin-phase-three.js";
 import { registerAdminPhaseFourRoutes, type AdminPhaseFourRouteOptions } from "./routes/admin-phase-four.js";
 import { registerAdminPhaseFiveRoutes, type AdminPhaseFiveRouteOptions } from "./routes/admin-phase-five.js";
+import { registerAdminDashboardRoutes, type AdminDashboardRouteOptions } from "./routes/admin-dashboard.js";
 import { registerPublicVerificationRoutes, type PublicVerificationRouteOptions } from "./routes/public-verification.js";
 import { registerPublicDownloadAuthorizationRoutes,
   type PublicDownloadAuthorizationRouteOptions } from "./routes/public-download-authorization.js";
@@ -26,6 +27,7 @@ export interface BuildApiOptions {
   readonly phaseThree?: AdminPhaseThreeRouteOptions;
   readonly phaseFour?: AdminPhaseFourRouteOptions;
   readonly phaseFive?: AdminPhaseFiveRouteOptions;
+  readonly dashboard?: AdminDashboardRouteOptions;
   readonly publicVerification?: PublicVerificationRouteOptions;
   readonly publicDownloadAuthorization?: PublicDownloadAuthorizationRouteOptions;
   readonly publicCertificateDownload?: PublicCertificateDownloadRouteOptions;
@@ -42,6 +44,7 @@ export const buildApi = ({
   phaseThree,
   phaseFour,
   phaseFive,
+  dashboard,
   publicVerification,
   publicDownloadAuthorization,
   publicCertificateDownload
@@ -81,6 +84,7 @@ export const buildApi = ({
   }
   if (phaseFour !== undefined) registerAdminPhaseFourRoutes(app, phaseFour);
   if (phaseFive !== undefined) registerAdminPhaseFiveRoutes(app, phaseFive);
+  if (dashboard !== undefined) registerAdminDashboardRoutes(app, dashboard);
   if (publicVerification !== undefined) registerPublicVerificationRoutes(app, publicVerification);
   if (publicDownloadAuthorization !== undefined) {
     registerPublicDownloadAuthorizationRoutes(app, publicDownloadAuthorization);

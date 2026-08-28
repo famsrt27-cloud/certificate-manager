@@ -26,6 +26,7 @@ import { OrganizationAuthorizationService } from "./modules/auth/organization-au
 import { PhaseThreeService } from "./modules/phase-three/phase-three-service.js";
 import { PhaseFourService } from "./modules/phase-four/phase-four-service.js";
 import { PhaseFiveService } from "./modules/phase-five/phase-five-service.js";
+import { DashboardService } from "./modules/dashboard/dashboard-service.js";
 import { PublicVerificationService } from "./modules/phase-six/public-verification-service.js";
 import { PublicDownloadAuthorizationService } from "./modules/phase-six/public-download-authorization-service.js";
 import { PublicCertificateDownloadService } from "./modules/phase-six/public-certificate-download-service.js";
@@ -99,6 +100,7 @@ const phaseThreeService = new PhaseThreeService({
 });
 const phaseFourService = new PhaseFourService({ database, storage, cursorSecret: environment.SESSION_SECRET });
 const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID });
+const dashboardService = new DashboardService(database);
 const publicVerificationService = new PublicVerificationService({
   verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
   repository: { findByPublicIdentifier: (publicIdentifier) => findPublicCertificateVerification(database, publicIdentifier) }
@@ -162,6 +164,7 @@ const app = buildApi({
     templateAssetMaxBytes: environment.TEMPLATE_ASSET_MAX_BYTES
   },
   phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService },
+  dashboard: { authentication: authenticationService, authorization, service: dashboardService },
   publicVerification: { service: publicVerificationService, rateLimiter: publicVerificationRateLimiter },
   publicDownloadAuthorization: { service: publicDownloadAuthorizationService,
     rateLimiter: publicDownloadAuthorizationRateLimiter },

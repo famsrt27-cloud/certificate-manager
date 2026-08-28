@@ -147,6 +147,18 @@ Requires a valid session and `X-CSRF-Token`. The server deletes the Redis sessio
 
 ## Admin endpoints
 
+### Organization dashboard summary
+
+`GET /api/admin/dashboard`
+
+- Requires an authenticated active membership, `X-Organization-ID`, and `organization:read`.
+- Returns `Cache-Control: no-store` and a bounded aggregate summary for the selected organization.
+- Metric groups are omitted unless the server-resolved membership has the corresponding existing read permission: `project:read`, `training:read`, `participant:read`, `template:read`, `certificate:read`, or `job:read`.
+- Project and training `active` counts include only `ACTIVE` rows; `total` includes all lifecycle states.
+- Published template-version readiness counts only `PUBLISHED` versions belonging to active templates.
+- Certificate `in_progress` counts `DRAFT` and `GENERATING` certificates. Job attention counts expose only lifecycle totals, never job payloads or error details.
+- All aggregates are explicitly filtered by `organization_id`; no resource identifiers, recipient data, storage keys, token material, or session data are returned.
+
 The examples below show core contracts. CRUD list/read/update/archive endpoints follow the same envelope, organization-scope and permission rules and must be added to OpenAPI before implementation.
 
 ### Create project

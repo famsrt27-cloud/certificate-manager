@@ -8,8 +8,8 @@ import {
   TemplateAssetListResponseSchema, TemplateAssetResponseSchema, TemplateListResponseSchema, TemplatePreviewResponseSchema,
   TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
   UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema,
-  PublicCertificateDownloadRequestSchema, PublicDownloadAuthorizationRequestSchema, PublicDownloadAuthorizationResponseSchema,
-  PublicVerificationRequestSchema, PublicVerificationResponseSchema
+  DashboardSummaryResponseSchema, PublicCertificateDownloadRequestSchema, PublicDownloadAuthorizationRequestSchema,
+  PublicDownloadAuthorizationResponseSchema, PublicVerificationRequestSchema, PublicVerificationResponseSchema
 } from "@certificate-platform/contracts";
 import { z } from "zod";
 
@@ -58,6 +58,7 @@ export const openApiDocument = {
       responses: { ...response(200, AuthenticationResponseSchema), ...response(401, ErrorResponseSchema) } } },
     "/api/admin/auth/logout": { post: { security: stateSecurity,
       responses: { ...response(200, LogoutResponseSchema), ...response(403, ErrorResponseSchema) } } },
+    "/api/admin/dashboard": { get: readOperation("organization:read", DashboardSummaryResponseSchema) },
     "/api/admin/projects": {
       get: readOperation("project:read", ProjectListResponseSchema),
       post: writeOperation("project:create", ProjectResponseSchema, [], CreateProjectRequestSchema, 201)
