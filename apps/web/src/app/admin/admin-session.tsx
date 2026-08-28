@@ -2,22 +2,25 @@
 
 import { AuthenticationResponseSchema, LogoutResponseSchema, type AuthenticationData } from "@certificate-platform/contracts";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { AdminShell } from "../../components/admin/admin-shell";
-import { PhaseThreeDashboard } from "./phase-three-dashboard";
-import { TemplateManagement } from "./template-management";
+import { AdminContextProvider } from "./admin-context";
 
 const apiBasePath = process.env.NEXT_PUBLIC_API_BASE_PATH ?? "/api";
 
-export function AdminSession() {
+export function AdminSession({ children }: { readonly children: ReactNode }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const authenticationRequired = pathname !== "/admin/login";
   const [session, setSession] = useState<AuthenticationData | null>(null);
   const [error, setError] = useState(false);
   const [logoutPending, setLogoutPending] = useState(false);
   const [activeMembershipId, setActiveMembershipId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!authenticationRequired) return;
     const controller = new AbortController();
     void fetch(`${apiBasePath}/admin/auth/session`, {
       credentials: "same-origin",
@@ -35,7 +38,7 @@ export function AdminSession() {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) setError(true);
     });
     return () => controller.abort();
-  }, [router]);
+  }, [authenticationRequired, router]);
 
   const logout = async () => {
     if (session === null || logoutPending) return;
@@ -55,6 +58,7 @@ export function AdminSession() {
     }
   };
 
+  if (!authenticationRequired) return children;
   if (error) return (
     <main className="grid min-h-dvh place-items-center bg-[#f4f6f8] px-5">
       <div className="w-full max-w-md rounded-xl border border-red-200 bg-white p-6 text-center shadow-sm" role="alert">
@@ -75,19 +79,12 @@ export function AdminSession() {
   const activeMembership = session.memberships.find((membership) => membership.id === activeMembershipId) ?? null;
 
   return (
-    <AdminShell
-      activeMembershipId={activeMembershipId}
-      logoutPending={logoutPending}
-      memberships={session.memberships}
-      onLogout={() => void logout()}
-      onMembershipChange={setActiveMembershipId}
-      userEmail={session.user.email}
-    >
+    <AdminShell activeMembershipId={activeMembershipId} logoutPending={logoutPending} memberships={session.memberships}
+      onLogout={() => void logout()} onMembershipChange={setActiveMembershipId} userEmail={session.user.email}>
       {activeMembership === null ? null : (
-        <div className="space-y-8" key={activeMembership.id}>
-          <PhaseThreeDashboard csrfToken={session.csrf_token} membership={activeMembership} />
-          <TemplateManagement csrfToken={session.csrf_token} membership={activeMembership} />
-        </div>
+        <AdminContextProvider value={{ session, membership: activeMembership }}>
+          <div key={activeMembership.id}>{children}</div>
+        </AdminContextProvider>
       )}
     </AdminShell>
   );

@@ -1,6 +1,8 @@
 "use client";
 
 import type { AuthenticationData } from "@certificate-platform/contracts";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { BrandMark } from "../brand-mark";
@@ -19,12 +21,12 @@ type AdminShellProps = {
 };
 
 const navigation = [
-  { label: "ภาพรวม", active: true },
-  { label: "โครงการ", active: false },
-  { label: "การอบรม", active: false },
-  { label: "ผู้เข้าร่วม", active: false },
-  { label: "เทมเพลต", active: false },
-  { label: "ใบประกาศนียบัตร", active: false }
+  { label: "ภาพรวม", href: "/admin" },
+  { label: "โครงการ", href: "/admin/projects" },
+  { label: "การอบรม", href: "/admin/trainings" },
+  { label: "ผู้เข้าร่วม", href: "/admin/participants" },
+  { label: "เทมเพลต", href: "/admin/templates" },
+  { label: "ใบประกาศนียบัตร", href: "/admin/certificates" }
 ] as const;
 
 function MenuIcon({ open = false }: { readonly open?: boolean }) {
@@ -56,34 +58,21 @@ function PlaceholderIcon() {
 }
 
 function SidebarNavigation({ onNavigate }: { readonly onNavigate?: () => void }) {
+  const pathname = usePathname();
   return (
     <nav className="mt-8 flex-1" aria-label="เมนูหลัก">
       <p className="px-3 text-[11px] font-semibold tracking-[0.12em] text-slate-500 uppercase">เมนูหลัก</p>
       <ul className="mt-3 space-y-1">
         {navigation.map((item) => (
           <li key={item.label}>
-            {item.active ? (
-              <button
-                aria-current="page"
-                className="flex min-h-10 w-full items-center gap-3 rounded-lg bg-blue-50 px-3 text-left text-sm font-semibold text-[#1e478c]"
-                onClick={onNavigate}
-                type="button"
-              >
-                <OverviewIcon />
-                {item.label}
-              </button>
-            ) : (
-              <button
-                className="flex min-h-10 w-full cursor-not-allowed items-center gap-3 rounded-lg px-3 text-left text-sm font-medium text-slate-400"
-                disabled
-                title="พร้อมใช้งานในส่วนถัดไป"
-                type="button"
-              >
-                <PlaceholderIcon />
-                {item.label}
-                <span className="ml-auto text-[10px] font-normal text-slate-400">เร็ว ๆ นี้</span>
-              </button>
-            )}
+            <Link aria-current={(item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href)) ? "page" : undefined}
+              className={`flex min-h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-sm transition-colors focus:outline-none focus:ring-3 focus:ring-blue-100 ${
+                (item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href))
+                  ? "bg-blue-50 font-semibold text-[#1e478c]" : "font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-950"
+              }`} href={item.href} onClick={() => onNavigate?.()}>
+              {item.href === "/admin" ? <OverviewIcon /> : <PlaceholderIcon />}
+              {item.label}
+            </Link>
           </li>
         ))}
       </ul>
@@ -122,7 +111,9 @@ export function AdminShell({
   userEmail
 }: AdminShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
   const activeMembership = memberships.find((membership) => membership.id === activeMembershipId) ?? null;
+  const currentNavigation = navigation.find((item) => item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href));
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -173,7 +164,7 @@ export function AdminShell({
           <MenuIcon />
         </button>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-900">ภาพรวม</p>
+          <p className="truncate text-sm font-semibold text-slate-900">{currentNavigation?.label ?? "พื้นที่ผู้ดูแลระบบ"}</p>
           <p className="truncate text-xs text-slate-500 sm:hidden">{activeMembership?.organization.name ?? "Certificate Platform"}</p>
         </div>
         <div className="ml-auto flex min-w-0 items-center gap-3">
@@ -201,20 +192,14 @@ export function AdminShell({
 
       <main className="w-full px-4 py-6 sm:px-6 sm:py-8 lg:px-8 xl:px-10" id="main-content">
         <div className="mx-auto w-full max-w-[1480px]">
-          <section aria-labelledby="admin-title">
-            <p className="text-sm font-semibold text-[#2557a7]">พื้นที่ทำงานผู้ดูแลระบบ</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-[-0.02em] text-slate-950 sm:text-[28px]" id="admin-title">ภาพรวมระบบ</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">ติดตามและจัดการกระบวนการออกใบประกาศนียบัตรขององค์กรจากพื้นที่ทำงานนี้</p>
-          </section>
-
           {memberships.length === 0 ? (
-            <section className="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900" role="status">
+            <section className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900" role="status">
               บัญชีนี้ยังไม่มีสมาชิกองค์กรที่ใช้งานอยู่ โปรดติดต่อผู้ดูแลระบบขององค์กร
             </section>
           ) : (
             <>
               {memberships.length > 1 ? (
-                <div className="mt-6 sm:hidden">
+                <div className="mb-6 sm:hidden">
                   <label className="block text-sm font-semibold text-slate-700" htmlFor="active-organization-mobile">องค์กร</label>
                   <select
                     className="mt-2 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 focus:border-[#2557a7] focus:outline-none focus:ring-3 focus:ring-blue-100"
@@ -226,24 +211,7 @@ export function AdminShell({
                   </select>
                 </div>
               ) : null}
-              <section className="mt-6 rounded-xl border border-slate-200 bg-white px-5 py-6 sm:px-6 sm:py-7" aria-labelledby="workspace-ready-title">
-                <div className="flex items-start gap-4">
-                  <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-blue-50 text-[#2557a7]" aria-hidden="true"><OverviewIcon /></span>
-                  <div>
-                    <h2 className="text-base font-semibold text-slate-950" id="workspace-ready-title">พื้นที่ทำงานพร้อมใช้งาน</h2>
-                    <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">เนื้อหาแดชบอร์ดและข้อมูลสรุปจะได้รับการพัฒนาใน Frontend Part 2 โดยไม่มีการแสดงข้อมูลตัวอย่างหรือสถิติที่ไม่ได้มาจากระบบจริง</p>
-                  </div>
-                </div>
-              </section>
-              {children ? (
-                <section className="mt-8" aria-labelledby="current-tools-title">
-                  <div className="mb-4 border-b border-slate-200 pb-4">
-                    <h2 className="text-base font-semibold text-slate-900" id="current-tools-title">เครื่องมือจัดการปัจจุบัน</h2>
-                    <p className="mt-1 text-sm text-slate-500">หน้าจอการทำงานเดิมจะได้รับการปรับรูปแบบในส่วนถัดไป</p>
-                  </div>
-                  {children}
-                </section>
-              ) : null}
+              {children}
             </>
           )}
         </div>

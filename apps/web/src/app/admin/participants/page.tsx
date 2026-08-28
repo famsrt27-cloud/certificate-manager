@@ -1,0 +1,11 @@
+"use client";
+
+import { AdminPageHeader } from "../../../components/admin/admin-page-header";
+import { useAdminContext } from "../admin-context";
+import { PhaseThreeDashboard } from "../phase-three-dashboard";
+
+export default function ParticipantsPage() {
+  const { membership, session } = useAdminContext();
+  return <><AdminPageHeader eyebrow="ข้อมูลผู้รับใบประกาศ" title="ผู้เข้าร่วม" description="นำเข้า ตรวจสอบ และดูแลรายชื่อผู้เข้าร่วมภายในขอบเขตองค์กร" />
+    <PhaseThreeDashboard csrfToken={session.csrf_token} key={membership.id} membership={membership} view="participants" /></>;
+}
