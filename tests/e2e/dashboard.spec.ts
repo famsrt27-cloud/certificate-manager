@@ -114,8 +114,9 @@ test("dashboard omits unauthorized metrics and creation actions", async ({ page 
     projects: { active: 0, total: 0 }, trainings: { active: 0, total: 0 }, templates: { active: 0, published_versions: 0 }
   }, meta: { request_id: requestId } } }));
   await page.goto("/admin");
-  await expect(page.getByText("ผู้เข้าร่วม", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("ใบประกาศพร้อมใช้", { exact: true })).toHaveCount(0);
+  const dashboardContent = page.locator("#main-content");
+  await expect(dashboardContent.getByText("ผู้เข้าร่วม", { exact: true })).toHaveCount(0);
+  await expect(dashboardContent.getByText("ใบประกาศพร้อมใช้", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "สร้างโครงการ" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "เตรียมเทมเพลต" })).toHaveCount(0);
 });

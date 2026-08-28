@@ -9,7 +9,7 @@
   --accent: #2557a7;
   --accent-strong: #1e478c;
   --focus: #4a7ed0;
-  font-family: "Leelawadee UI", "Noto Sans Thai", Tahoma, Arial, sans-serif;
+  font-family: var(--font-product), "Noto Sans Thai Looped", "Leelawadee UI", Tahoma, sans-serif;
   background: var(--background);
   color: var(--foreground);
 }
@@ -21,10 +21,18 @@
 body {
   min-height: 100vh;
   margin: 0;
+  font-family: var(--font-product), "Noto Sans Thai Looped", "Leelawadee UI", Tahoma, sans-serif;
   background: var(--background);
   color: var(--foreground);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }
 
 ::selection {

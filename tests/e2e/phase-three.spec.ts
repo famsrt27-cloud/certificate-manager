@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Route } from "@playwright/test";
 
 const requestId = "00000000-0000-4000-8000-000000000001";
 const organizationId = "00000000-0000-4000-8000-000000000002";
@@ -17,7 +17,7 @@ test("admin creates project/training and previews then confirms a participant im
         "project:create", "project:read", "training:create", "training:read", "participant:import", "participant:read"
       ] }], csrf_token: csrfToken
   }, meta: { request_id: requestId } } }));
-  await page.route("**/api/admin/projects", async (route) => {
+  const projectsHandler = async (route: Route) => {
     expect(route.request().headers()["x-organization-id"]).toBe(organizationId);
     if (route.request().method() === "POST") {
       expect(route.request().headers()["x-csrf-token"]).toBe(csrfToken);
@@ -28,8 +28,10 @@ test("admin creates project/training and previews then confirms a participant im
     }
     await route.fulfill({ json: { data: projectCreated ? [{ id: projectId, name: "Safe Project", slug: "safe-project", status: "ACTIVE" }] : [],
       meta: { request_id: requestId, next_cursor: null } } });
-  });
-  await page.route("**/api/admin/trainings", async (route) => {
+  };
+  await page.route("**/api/admin/projects", projectsHandler);
+  await page.route("**/api/admin/projects?**", projectsHandler);
+  const trainingsHandler = async (route: Route) => {
     if (route.request().method() === "POST") {
       trainingCreated = true;
       await route.fulfill({ status: 201, json: { data: { id: trainingId, project_id: projectId, name: "Safe Training",
@@ -38,7 +40,9 @@ test("admin creates project/training and previews then confirms a participant im
     }
     await route.fulfill({ json: { data: trainingCreated ? [{ id: trainingId, project_id: projectId, name: "Safe Training",
       code: "SAFE-1", start_date: null, end_date: null, status: "ACTIVE" }] : [], meta: { request_id: requestId, next_cursor: null } } });
-  });
+  };
+  await page.route("**/api/admin/trainings", trainingsHandler);
+  await page.route("**/api/admin/trainings?**", trainingsHandler);
   await page.route("**/api/admin/participants", (route) => route.fulfill({ json: {
     data: [], meta: { request_id: requestId, next_cursor: null }
   } }));
@@ -55,20 +59,24 @@ test("admin creates project/training and previews then confirms a participant im
     data: { job_id: jobId, status: "QUEUED" }, meta: { request_id: requestId }
   } }));
 
-  await page.goto("/admin");
-  const projects = page.getByRole("region", { name: "Projects" });
-  await projects.getByLabel("Name").fill("Safe Project");
-  await projects.getByLabel("Slug").fill("safe-project");
-  await projects.getByRole("button", { name: "Create project" }).click();
-  await expect(projects.getByText("Safe Project")).toBeVisible();
+  await page.goto("/admin/projects");
+  await page.getByRole("button", { name: "สร้างโครงการ", exact: true }).first().click();
+  const projectDialog = page.getByRole("dialog", { name: "สร้างโครงการใหม่" });
+  await projectDialog.getByLabel("ชื่อโครงการ").fill("Safe Project");
+  await projectDialog.getByLabel("slug").fill("safe-project");
+  await projectDialog.getByRole("button", { name: "สร้างโครงการ" }).click();
+  await expect(page.getByRole("region", { name: "รายการโครงการ" }).locator(':text-is("Safe Project"):visible').first()).toBeVisible();
 
-  const trainings = page.getByRole("region", { name: "Trainings" });
-  await trainings.getByLabel("Project").selectOption(projectId);
-  await trainings.getByLabel("Name").fill("Safe Training");
-  await trainings.getByLabel("Code").fill("SAFE-1");
-  await trainings.getByRole("button", { name: "Create training" }).click();
-  await expect(trainings.getByText("Safe Training")).toBeVisible();
+  await page.goto("/admin/trainings");
+  await page.getByRole("button", { name: "เพิ่มการอบรม", exact: true }).first().click();
+  const trainingDialog = page.getByRole("dialog", { name: "เพิ่มการอบรม" });
+  await trainingDialog.getByLabel("โครงการ").selectOption(projectId);
+  await trainingDialog.getByLabel("ชื่อการอบรม").fill("Safe Training");
+  await trainingDialog.getByLabel("รหัสการอบรม").fill("SAFE-1");
+  await trainingDialog.getByRole("button", { name: "เพิ่มการอบรม" }).click();
+  await expect(page.getByRole("region", { name: "รายการการอบรม" }).locator(':text-is("Safe Training"):visible').first()).toBeVisible();
 
+  await page.goto("/admin/participants");
   const participantImport = page.getByRole("region", { name: "Participant import" });
   await participantImport.getByLabel("Training").selectOption(trainingId);
   await participantImport.getByLabel("File").setInputFiles({ name: "participants.csv", mimeType: "text/csv",
