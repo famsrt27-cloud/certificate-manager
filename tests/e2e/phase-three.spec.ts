@@ -10,6 +10,7 @@ const csrfToken = "c".repeat(43);
 test("admin creates project/training and previews then confirms a participant import", async ({ page }) => {
   let projectCreated = false;
   let trainingCreated = false;
+  let importConfirmed = false;
   await page.route("**/api/admin/auth/session", (route) => route.fulfill({ json: { data: {
     user: { id: "00000000-0000-4000-8000-000000000006", email: "admin@example.invalid" },
     memberships: [{ id: "00000000-0000-4000-8000-000000000007",
@@ -46,6 +47,9 @@ test("admin creates project/training and previews then confirms a participant im
   await page.route("**/api/admin/participants", (route) => route.fulfill({ json: {
     data: [], meta: { request_id: requestId, next_cursor: null }
   } }));
+  await page.route("**/api/admin/participants?**", (route) => route.fulfill({ json: {
+    data: [], meta: { request_id: requestId, next_cursor: null }
+  } }));
   await page.route(`**/api/admin/trainings/${trainingId}/participants/import`, async (route) => {
     expect(route.request().headers()["idempotency-key"]).toBeTruthy();
     expect(route.request().headers()["x-csrf-token"]).toBe(csrfToken);
@@ -55,9 +59,13 @@ test("admin creates project/training and previews then confirms a participant im
     job_id: jobId, status: "AWAITING_CONFIRMATION", progress: { completed: 1, total: 1 }, counts: { valid: 1, invalid: 0 },
     preview: [{ row_number: 2, display_name: "Synthetic Person", external_reference: "REF-1", status: "VALID", validation_errors: [] }]
   }, meta: { request_id: requestId, next_cursor: null } } }));
-  await page.route(`**/api/admin/participant-imports/${jobId}/confirm`, (route) => route.fulfill({ status: 202, json: {
+  await page.route(`**/api/admin/participant-imports/${jobId}?**`, (route) => route.fulfill({ json: { data: {
+    job_id: jobId, status: importConfirmed ? "SUCCEEDED" : "AWAITING_CONFIRMATION", progress: { completed: 1, total: 1 }, counts: { valid: 1, invalid: 0 },
+    preview: importConfirmed ? [] : [{ row_number: 2, display_name: "Synthetic Person", external_reference: "REF-1", status: "VALID", validation_errors: [] }]
+  }, meta: { request_id: requestId, next_cursor: null } } }));
+  await page.route(`**/api/admin/participant-imports/${jobId}/confirm`, (route) => { importConfirmed = true; return route.fulfill({ status: 202, json: {
     data: { job_id: jobId, status: "QUEUED" }, meta: { request_id: requestId }
-  } }));
+  } }); });
 
   await page.goto("/admin/projects");
   await page.getByRole("button", { name: "สร้างโครงการ", exact: true }).first().click();
@@ -77,13 +85,13 @@ test("admin creates project/training and previews then confirms a participant im
   await expect(page.getByRole("region", { name: "รายการการอบรม" }).locator(':text-is("Safe Training"):visible').first()).toBeVisible();
 
   await page.goto("/admin/participants");
-  const participantImport = page.getByRole("region", { name: "Participant import" });
-  await participantImport.getByLabel("Training").selectOption(trainingId);
-  await participantImport.getByLabel("File").setInputFiles({ name: "participants.csv", mimeType: "text/csv",
+  await page.getByRole("button", { name: "นำเข้าผู้เข้าร่วม", exact: true }).first().click();
+  const participantImport = page.getByRole("dialog", { name: "นำเข้าผู้เข้าร่วม" });
+  await participantImport.getByLabel("การอบรม").selectOption(trainingId);
+  await participantImport.getByLabel("ไฟล์รายชื่อ CSV หรือ XLSX").setInputFiles({ name: "participants.csv", mimeType: "text/csv",
     buffer: Buffer.from("display_name,external_reference\nSynthetic Person,REF-1\n") });
-  await participantImport.getByRole("button", { name: "Upload and validate" }).click();
-  await participantImport.getByRole("button", { name: "Refresh preview" }).click();
-  await expect(participantImport.getByText("Synthetic Person")).toBeVisible();
-  await participantImport.getByRole("button", { name: "Confirm import" }).click();
-  await expect(page.getByText("Import confirmed and queued.")).toBeVisible();
+  await participantImport.getByRole("button", { name: "อัปโหลดและตรวจสอบ" }).click();
+  await expect(participantImport.locator("td:visible, p:visible", { hasText: "Synthetic Person" }).first()).toBeVisible();
+  await participantImport.getByRole("button", { name: "ยืนยันการนำเข้า" }).click();
+  await expect(participantImport.getByText("นำเข้าผู้เข้าร่วมเรียบร้อยแล้ว")).toBeVisible();
 });

@@ -46,21 +46,33 @@ export function Field({ children, error, hint, label, htmlFor }: {
   );
 }
 
-export function Dialog({ children, description, open, onClose, title, pending = false }: {
+export function Dialog({ children, description, open, onClose, title, pending = false, size = "default" }: {
   readonly children: ReactNode;
   readonly description?: string | undefined;
   readonly open: boolean;
   readonly onClose: () => void;
   readonly title: string;
   readonly pending?: boolean;
+  readonly size?: "default" | "wide";
 }) {
   const closeButton = useRef<HTMLButtonElement>(null);
   const dialogPanel = useRef<HTMLElement>(null);
+  const returnFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!open) return;
+    returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const priorOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const timer = window.setTimeout(() => closeButton.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.body.style.overflow = priorOverflow;
+      const target = returnFocus.current;
+      window.setTimeout(() => target?.focus(), 0);
+    };
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !pending) onClose();
       if (event.key !== "Tab") return;
@@ -74,9 +86,7 @@ export function Dialog({ children, description, open, onClose, title, pending = 
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      window.clearTimeout(timer);
       document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = priorOverflow;
     };
   }, [onClose, open, pending]);
   if (!open) return null;
@@ -84,7 +94,7 @@ export function Dialog({ children, description, open, onClose, title, pending = 
     <div className="fixed inset-0 z-[60] grid items-end sm:items-center sm:justify-items-center sm:p-5">
       <button aria-label="ปิดหน้าต่าง" className="absolute inset-0 bg-slate-950/45" disabled={pending} onClick={onClose} type="button" />
       <section aria-describedby={description === undefined ? undefined : "resource-dialog-description"} aria-labelledby="resource-dialog-title"
-        aria-modal="true" className="relative max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:max-w-xl sm:rounded-2xl" ref={dialogPanel} role="dialog">
+        aria-modal="true" className={`relative max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:rounded-2xl ${size === "wide" ? "sm:max-w-4xl" : "sm:max-w-xl"}`} ref={dialogPanel} role="dialog">
         <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
           <div>
             <h2 className="text-lg font-semibold text-slate-950" id="resource-dialog-title">{title}</h2>
