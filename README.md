@@ -716,6 +716,19 @@ API_INTERNAL_BASE_URL=http://127.0.0.1:3001
 
 ## 11.1 Recommended local development model
 
+### One-click local startup (Windows)
+
+Double-click `start-local.cmd` from the repository root. The launcher checks for an
+already-running healthy stack, starts Docker Desktop when needed, starts PostgreSQL,
+Redis, MinIO, applies migrations, then starts Web, API, and Worker. When everything is
+ready it opens `http://localhost:3100/admin/participants` automatically.
+
+Keep the launcher window open while testing and press `Ctrl+C` to stop only the Web,
+API, and Worker processes created by that launcher. Runtime logs are written under
+`.local/logs/` and are excluded from source control. The launcher does not create or
+store administrator credentials; on a first local setup, run `pnpm dev:bootstrap-admin`
+once as documented in `docs/27-local-development-bootstrap.md`.
+
 จนกว่า Group 7 Docker/workspace fixes จะเสร็จ แนะนำ:
 
 ```text
