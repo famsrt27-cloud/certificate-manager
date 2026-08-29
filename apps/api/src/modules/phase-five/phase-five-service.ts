@@ -13,7 +13,7 @@ export class PhaseFiveService {
       organizationId: context.organizationId, trainingId, templateVersionId: request.template_version_id,
       idempotencyKey, requestedByMembershipId: context.actorMembershipId, selectionMode,
       ...(request.participant_ids === undefined ? {} : { requestedParticipantIds: request.participant_ids }),
-      rendererRevision: "pdfkit-qrcode-v1", verificationKeyKid: this.options.verificationKeyKid,
+      rendererRevision: "pdfkit-qrcode-v2", verificationKeyKid: this.options.verificationKeyKid,
       plannedIssuedAt: (this.options.now ?? (() => new Date()))(),
       auditRecord: { organizationId: context.organizationId, actorUserId: context.actorUserId,
         actorMembershipId: context.actorMembershipId, action: "CERTIFICATE_GENERATION_REQUESTED",

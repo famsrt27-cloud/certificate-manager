@@ -184,6 +184,22 @@ export const registerAdminPhaseFourRoutes = (app: FastifyInstance, options: Admi
     const data = await options.service.getAsset(context.organizationId, templateId, assetId);
     return reply.headers(noStore).send(TemplateAssetResponseSchema.parse({ data, meta: { request_id: request.id } }));
   });
+  app.get("/api/admin/templates/:templateId/assets/:assetId/content", async (request, reply) => {
+    const context = await authorize(request, options, "template:read", false);
+    const { templateId, assetId } = parse(AssetParamsSchema, request.params);
+    const content = await options.service.getActiveImageContent(
+      context.organizationId, templateId, assetId, options.templateAssetMaxBytes
+    );
+    return reply
+      .header("cache-control", "private, no-store")
+      .header("content-type", content.mimeType)
+      .header("content-length", String(content.bytes.byteLength))
+      .header("content-disposition", "inline")
+      .header("x-content-type-options", "nosniff")
+      .header("cross-origin-resource-policy", "same-origin")
+      .header("content-security-policy", "default-src 'none'; sandbox")
+      .send(Buffer.from(content.bytes));
+  });
   app.post("/api/admin/templates/:templateId/assets/:assetId/archive", async (request, reply) => {
     const context = await authorize(request, options, "template:asset:create", true);
     const { templateId, assetId } = parse(AssetParamsSchema, request.params);

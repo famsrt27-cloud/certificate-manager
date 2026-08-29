@@ -51,6 +51,8 @@ Large admin collections use cursor pagination:
 }
 ```
 
+The template collection includes a bounded `preview` summary for each item so the library can render the canonical composition without per-template version requests. The selected preview is the highest version in `PUBLISHED`, otherwise the highest `DRAFT`, otherwise the highest remaining lifecycle state; templates without a version return `preview: null`. The summary contains only `version`, `status`, and the validated canonical `definition`. Private image bytes remain available only through the tenant-authorized asset-content endpoint.
+
 ## Foundation health endpoints
 
 Operational health endpoints are outside the `/api` business namespace and do not implement domain behavior:

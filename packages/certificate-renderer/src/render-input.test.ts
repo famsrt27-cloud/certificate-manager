@@ -96,7 +96,7 @@ describe("certificate renderer input boundary", () => {
 
   it("accepts only the renderer implementation revision exported by this package", () => {
     const input = baseInput();
-    input.rendererRevision = "pdfkit-qrcode-v2";
+    input.rendererRevision = "pdfkit-qrcode-v3";
 
     expect(() => prepareCertificateRenderInput(input, { maxTotalAssetBytes: 1_024 })).toThrow();
   });

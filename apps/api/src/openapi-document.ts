@@ -141,6 +141,23 @@ export const openApiDocument = {
     "/api/admin/templates/{templateId}/assets/{assetId}": {
       get: readOperation("template:read", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
     },
+    "/api/admin/templates/{templateId}/assets/{assetId}/content": {
+      get: {
+        security: adminSecurity,
+        "x-required-permission": "template:read",
+        parameters: [organizationParameter, pathId("templateId"), pathId("assetId")],
+        responses: {
+          "200": { description: "Authenticated active template image", headers: {
+            "Cache-Control": { schema: { type: "string" } },
+            "X-Content-Type-Options": { schema: { type: "string" } }
+          }, content: {
+            "image/png": { schema: { type: "string", format: "binary" } },
+            "image/jpeg": { schema: { type: "string", format: "binary" } }
+          } },
+          ...errors
+        }
+      }
+    },
     "/api/admin/templates/{templateId}/assets/{assetId}/archive": {
       post: writeOperation("template:asset:create", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
     },
