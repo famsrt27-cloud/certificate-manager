@@ -4,6 +4,7 @@ export const AUDIT_ACTIONS = [
   "AUTH_LOGOUT",
   "AUTH_SESSION_REVOKED",
   "AUTHORIZATION_DENIED",
+  "ORGANIZATION_PUBLIC_SEARCH_UPDATED",
   "PROJECT_CREATED",
   "PROJECT_UPDATED",
   "PROJECT_ARCHIVED",
@@ -34,7 +35,7 @@ export interface AuditEvent {
   readonly actorUserId: string | null;
   readonly actorMembershipId: string | null;
   readonly action: AuditAction;
-  readonly resourceType: "authentication" | "authorization" | "project" | "training" | "participant" | "participant_import"
+  readonly resourceType: "authentication" | "authorization" | "organization" | "project" | "training" | "participant" | "participant_import"
     | "template" | "template_version" | "template_asset" | "certificate_generation" | "certificate";
   readonly resourceId: string | null;
   readonly requestId: string;

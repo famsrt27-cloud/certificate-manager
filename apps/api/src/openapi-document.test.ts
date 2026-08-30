@@ -16,6 +16,9 @@ describe("OpenAPI document", () => {
       "/api/admin/certificates", "/api/admin/trainings/{trainingId}/certificates/generate",
       "/api/admin/certificates/{certificateId}/pdf", "/api/admin/certificates/{certificateId}/revoke",
       "/api/public/verify", "/api/public/certificates/download-authorize",
+      "/api/admin/organizations/current", "/api/public/certificates/project-suggestions",
+      "/api/public/certificates/training-suggestions", "/api/public/certificates/search",
+      "/api/public/certificates/search-download-authorize",
       "/api/public/certificates/download"
     ]));
   });
@@ -34,5 +37,31 @@ describe("OpenAPI document", () => {
       .toEqual(["download_token"]);
     expect(operation.responses[200].content["application/pdf"].schema).toEqual({ type: "string", format: "binary" });
     expect(JSON.stringify(operation)).not.toMatch(/storage_key|bucket|object_url|public_identifier|certificate_uuid|sha256|kid|jti/i);
+  });
+
+  it("documents bounded search and its distinct capability exchange without internal identifiers", () => {
+    const search = openApiDocument.paths["/api/public/certificates/search"].post;
+    const exchange = openApiDocument.paths["/api/public/certificates/search-download-authorize"].post;
+    expect(search.security).toEqual([]);
+    expect(Object.keys(search.requestBody.content["application/json"].schema.properties ?? {}).sort())
+      .toEqual(["certificate_number", "project_name", "recipient_name", "training_name"]);
+    expect(Object.keys(exchange.requestBody.content["application/json"].schema.properties ?? {}))
+      .toEqual(["search_result_token"]);
+    expect(JSON.stringify({ search, exchange })).not.toMatch(/public_identifier|participant_id|external_reference|storage_key|kid|jti/i);
+  });
+
+  it("documents safe suggestion labels and the canonical organization update permission", () => {
+    const project = openApiDocument.paths["/api/public/certificates/project-suggestions"].post;
+    const training = openApiDocument.paths["/api/public/certificates/training-suggestions"].post;
+    const setting = openApiDocument.paths["/api/admin/organizations/current"].patch;
+    expect(project.security).toEqual([]);
+    expect(Object.keys(project.requestBody.content["application/json"].schema.properties ?? {})).toEqual(["query"]);
+    expect(Object.keys(training.requestBody.content["application/json"].schema.properties ?? {}).sort())
+      .toEqual(["project_name", "query"]);
+    expect(training.requestBody.content["application/json"].schema.required).toEqual(["query"]);
+    expect(setting["x-required-permission"]).toBe("organization:update");
+    expect(JSON.stringify({ project: project.responses[200]!.content["application/json"]!.schema.properties!.data,
+      training: training.responses[200]!.content["application/json"]!.schema.properties!.data }))
+      .not.toMatch(/uuid|participant|recipient|external_reference|count|total/i);
   });
 });

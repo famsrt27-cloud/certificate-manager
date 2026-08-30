@@ -136,3 +136,9 @@ The database stores:
 - current certificate status and rendering metadata
 
 The database does not store the complete verification token or download token in plaintext.
+
+## Certificate search result capability
+
+Successful bounded discovery may mint a compact HS256 capability with header `typ: CSRT` and strict claims `v: 1`, `typ: certificate-search-result`, `aud: public-certificate-search-result`, opaque `pcid`, `iat`, `exp` and random 128-bit `jti`. Its lifetime is configurable from 60 to 300 seconds and defaults to 180 seconds. It binds one certificate public identity without returning that identity separately.
+
+Only `POST /api/public/certificates/search-download-authorize` accepts this token. Verification authenticates type, audience, key, signature, canonical claims, time and expiry before database access. It is mutually exclusive with QR verification (`CVT`) and PDF download (`CDT`) tokens. The browser keeps it only in component memory. Successful exchange rechecks current publication state and mints a normal `CDT`; final redemption is unchanged.

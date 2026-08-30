@@ -5,7 +5,7 @@ import { AdminDashboard } from "../../components/admin/dashboard/admin-dashboard
 import { useAdminContext } from "./admin-context";
 
 export default function AdminPage() {
-  const { membership } = useAdminContext();
+  const { membership, session } = useAdminContext();
   return <><AdminPageHeader eyebrow="ศูนย์ควบคุมองค์กร" title="ภาพรวม" description="ติดตามความพร้อมของข้อมูลและงานสำคัญตลอดกระบวนการออกใบประกาศนียบัตร" />
-    <AdminDashboard key={membership.id} membership={membership} /></>;
+    <AdminDashboard csrfToken={session.csrf_token} key={membership.id} membership={membership} /></>;
 }

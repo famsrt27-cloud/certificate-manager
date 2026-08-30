@@ -12,6 +12,7 @@ export interface DashboardMetricSelection {
 }
 
 export interface DashboardAggregateResult {
+  readonly organization: { readonly publicCertificateSearchEnabled: boolean };
   readonly projects?: { readonly active: number; readonly total: number };
   readonly trainings?: { readonly active: number; readonly total: number };
   readonly participants?: { readonly total: number };
@@ -27,7 +28,11 @@ export const getDashboardAggregates = async (
   organizationId: string,
   selection: DashboardMetricSelection
 ): Promise<DashboardAggregateResult> => {
-  const [projects, trainings, participants, templates, certificates, jobs] = await Promise.all([
+  const [organization, projects, trainings, participants, templates, certificates, jobs] = await Promise.all([
+    database.selectFrom("organizations")
+      .select("public_certificate_search_enabled")
+      .where("id", "=", organizationId)
+      .executeTakeFirstOrThrow(),
     selection.projects ? database.selectFrom("projects").select((expression) => [
       expression.fn.countAll().as("total"),
       expression.fn.count("id").filterWhere("status", "=", "ACTIVE").as("active")
@@ -67,6 +72,7 @@ export const getDashboardAggregates = async (
   ]);
 
   return {
+    organization: { publicCertificateSearchEnabled: organization.public_certificate_search_enabled },
     ...(projects === undefined ? {} : { projects: { active: asNumber(projects.active), total: asNumber(projects.total) } }),
     ...(trainings === undefined ? {} : { trainings: { active: asNumber(trainings.active), total: asNumber(trainings.total) } }),
     ...(participants === undefined ? {} : { participants: { total: asNumber(participants.total) } }),
@@ -81,3 +87,13 @@ export const getDashboardAggregates = async (
     } })
   };
 };
+
+export const updateOrganizationPublicCertificateSearch = async (
+  database: Kysely<Database>,
+  organizationId: string,
+  enabled: boolean
+) => database.updateTable("organizations")
+  .set({ public_certificate_search_enabled: enabled, updated_at: new Date() })
+  .where("id", "=", organizationId)
+  .returning("public_certificate_search_enabled")
+  .executeTakeFirst();

@@ -7,10 +7,10 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildApi } from "../../src/app.js";
-import { ApplicationError } from "../../src/errors/application-error.js";
 import type { AuthenticatedContext, AuthenticationService } from "../../src/modules/auth/authentication-service.js";
 import { OrganizationAuthorizationService } from "../../src/modules/auth/organization-authorization-service.js";
 import { DashboardService } from "../../src/modules/dashboard/dashboard-service.js";
+import { OrganizationSettingsService } from "../../src/modules/dashboard/organization-settings-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const enabled = databaseUrl !== undefined && new URL(databaseUrl).pathname.toLowerCase().includes("test");
@@ -22,7 +22,7 @@ describe.skipIf(!enabled)("organization dashboard integration", () => {
   const userId = randomUUID();
   const membershipId = randomUUID();
   const otherMembershipId = randomUUID();
-  const allReadPermissions = ["organization:read", "project:read", "training:read", "participant:read", "template:read", "certificate:read", "job:read"];
+  const allReadPermissions = ["organization:read", "organization:update", "project:read", "training:read", "participant:read", "template:read", "certificate:read", "job:read"];
   let identity: EffectiveIdentity;
   let authenticated: AuthenticatedContext | null;
   let app: ReturnType<typeof buildApi>;
@@ -97,11 +97,13 @@ describe.skipIf(!enabled)("organization dashboard integration", () => {
     authenticated = { sessionId: "s".repeat(43), session: { version: 1, userId, csrfToken: "c".repeat(43),
       authorizationVersion: "a".repeat(64), createdAt: 1, lastSeenAt: 1, absoluteExpiresAt: 2 }, identity };
     const authentication = { authenticate: async () => authenticated,
-      validateStateChangingRequest: () => { throw new ApplicationError("REQUEST_FORBIDDEN", "Forbidden", 403); }
+      validateStateChangingRequest: () => undefined
     } as unknown as AuthenticationService;
     const authorization = new OrganizationAuthorizationService(authentication, { write: (event) => insertAuditRecord(database, event) });
     app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
-      readinessTimeoutMs: 100, logger: false, dashboard: { authentication, authorization, service: new DashboardService(database) } });
+      readinessTimeoutMs: 100, logger: false, dashboard: { authentication, authorization,
+        service: new DashboardService(database) }, organizationSettings: { authentication, authorization,
+        service: new OrganizationSettingsService(database) } });
     await app.ready();
   });
 
@@ -132,6 +134,7 @@ describe.skipIf(!enabled)("organization dashboard integration", () => {
     expect(response.status).toBe(200);
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(DashboardSummaryResponseSchema.parse(response.body).data).toEqual({
+      organization: { public_certificate_search_enabled: false },
       projects: { active: 1, total: 2 },
       trainings: { active: 1, total: 2 },
       participants: { total: 3 },
@@ -146,11 +149,11 @@ describe.skipIf(!enabled)("organization dashboard integration", () => {
     const prior = authenticated;
     const cases = [
       { role: "TEMPLATE_MANAGER", permissions: ["organization:read", "project:read", "training:read", "template:read"],
-        sections: ["projects", "trainings", "templates"] },
+        sections: ["organization", "projects", "trainings", "templates"] },
       { role: "CERTIFICATE_MANAGER", permissions: allReadPermissions,
-        sections: ["projects", "trainings", "participants", "templates", "certificates", "jobs"] },
+        sections: ["organization", "projects", "trainings", "participants", "templates", "certificates", "jobs"] },
       { role: "VIEWER", permissions: allReadPermissions,
-        sections: ["projects", "trainings", "participants", "templates", "certificates", "jobs"] }
+        sections: ["organization", "projects", "trainings", "participants", "templates", "certificates", "jobs"] }
     ] as const;
     for (const testCase of cases) {
       authenticated = { ...prior!, identity: { ...identity, memberships: [{ ...identity.memberships[0]!,
@@ -164,5 +167,31 @@ describe.skipIf(!enabled)("organization dashboard integration", () => {
 
   it("denies selection of an organization outside the authenticated membership", async () => {
     expect((await getDashboard(otherOrganizationId)).status).toBe(403);
+  });
+
+  it("updates public search only with organization:update and preserves tenant isolation", async () => {
+    const patchSetting = (selectedOrganizationId: string, enabledValue: boolean) => request(app.server)
+      .patch("/api/admin/organizations/current")
+      .set("x-organization-id", selectedOrganizationId)
+      .set("x-csrf-token", "c".repeat(43))
+      .send({ public_certificate_search_enabled: enabledValue });
+    const enabledResponse = await patchSetting(organizationId, true);
+    expect(enabledResponse.status).toBe(200);
+    expect(enabledResponse.body.data).toEqual({ public_certificate_search_enabled: true });
+    expect((await getDashboard()).body.data.organization).toEqual({ public_certificate_search_enabled: true });
+
+    const prior = authenticated;
+    authenticated = { ...prior!, identity: { ...identity, memberships: [{ ...identity.memberships[0]!,
+      permissions: allReadPermissions.filter((permission) => permission !== "organization:update") }] } };
+    expect((await patchSetting(organizationId, false)).status).toBe(403);
+    authenticated = prior;
+    expect((await patchSetting(otherOrganizationId, true)).status).toBe(403);
+    const foreign = await database.selectFrom("organizations").select("public_certificate_search_enabled")
+      .where("id", "=", otherOrganizationId).executeTakeFirstOrThrow();
+    expect(foreign.public_certificate_search_enabled).toBe(false);
+
+    const disabledResponse = await patchSetting(organizationId, false);
+    expect(disabledResponse.status).toBe(200);
+    expect(disabledResponse.body.data.public_certificate_search_enabled).toBe(false);
   });
 });

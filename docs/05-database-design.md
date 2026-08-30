@@ -96,3 +96,7 @@ Import source objects are removed after validation staging. Successful confirmat
 - Metadata uses reviewed action-specific schemas and never stores tokens, passwords, keys or unnecessary PII.
 - Public verification/download events may have no certificate or organization when resolution fails.
 - Security telemetry and event retention must follow `docs/02-security-privacy.md` and `docs/22-privacy-policy-design.md`.
+
+## Public search projection policy
+
+Public certificate search is opt-in per organization through `organizations.public_certificate_search_enabled`, default `FALSE`. It searches immutable `certificate_issuance_snapshots`, never live participant data, and requires `certificates.status = 'AVAILABLE'`. Migration `202608300009_public-certificate-search` adds the opt-in field and exact normalized certificate-number index. Migration `202608310010_canonical-recipient-name-search` adds one immutable canonical recipient-name function plus recipient-key-and-context expression indexes. The service reads at most eleven rows to enforce a ten-result public ceiling without a total count.

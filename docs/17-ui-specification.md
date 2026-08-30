@@ -94,3 +94,11 @@ Properties:
 - sufficient contrast
 - screen-reader labels
 - error messages associated with inputs
+
+## Public search and QR entry
+
+Opening `/verify` without a fragment defaults to “ค้นหาใบประกาศ” beside “ตรวจสอบด้วย QR”. Search provides a manual recipient input, database-backed optional project and training comboboxes, and an alternative exact certificate-number field. Training is searchable without a project; when a project is selected, it additionally filters training suggestions server-side. Project/training suggestions require typed input and selection; recipient names are never autocompleted. It prevents mixing search modes and explains “กรอกชื่อผู้รับพร้อมเลือกโครงการหรือการอบรม”. It shows no public catalog, totals, cursor, person URL or technical identifier. A valid QR fragment bypasses search and immediately runs canonical verification.
+
+The public root `/` is a Thai-first recipient landing page with lightweight navigation to `/`, `/verify` and `/admin/login`; it contains no development-phase terminology. The admin dashboard includes the small “การค้นหาใบประกาศสาธารณะ” organization toggle for members with `organization:update`, plus a disclosure that results may show recipient name, project, training, certificate number and issue date.
+
+Result cards show recipient, project, approved search-only training name, certificate number, issue date and “พร้อมใช้งาน”. Their download button holds the search-result token only in component memory, exchanges it in a POST body, and redeems the returned download token through the canonical PDF endpoint. Expiry asks the user to search again; other state changes use generic feedback and disable stale download state.

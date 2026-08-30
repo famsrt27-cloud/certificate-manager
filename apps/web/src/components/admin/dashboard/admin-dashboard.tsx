@@ -1,6 +1,7 @@
 "use client";
 
-import { DashboardSummaryResponseSchema, type AuthenticationData, type DashboardSummaryData } from "@certificate-platform/contracts";
+import { DashboardSummaryResponseSchema, OrganizationPublicSearchResponseSchema,
+  type AuthenticationData, type DashboardSummaryData } from "@certificate-platform/contracts";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
@@ -32,8 +33,9 @@ function DashboardLoading() {
 
 const actionClass = "inline-flex min-h-9 shrink-0 items-center justify-center rounded-lg bg-[#2557a7] px-3.5 text-sm font-semibold text-white hover:bg-[#1e478c] focus:outline-none focus:ring-3 focus:ring-blue-200";
 
-export function AdminDashboard({ membership }: { readonly membership: Membership }) {
+export function AdminDashboard({ csrfToken, membership }: { readonly csrfToken: string; readonly membership: Membership }) {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
+  const [settingState, setSettingState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [reload, setReload] = useState(0);
   const permissions = useMemo(() => new Set(membership.permissions), [membership.permissions]);
 
@@ -80,6 +82,25 @@ export function AdminDashboard({ membership }: { readonly membership: Membership
     { label: "ออกใบประกาศนียบัตร", complete: (data.certificates?.available ?? 0) > 0, available: data.certificates !== undefined, href: "/admin/certificates" }
   ];
 
+  const updatePublicSearch = async (enabled: boolean) => {
+    if (!permissions.has("organization:update") || settingState === "saving") return;
+    setSettingState("saving");
+    try {
+      const response = await fetch(`${apiBasePath}/admin/organizations/current`, {
+        method: "PATCH", credentials: "same-origin", cache: "no-store",
+        headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken,
+          "X-Organization-ID": membership.organization.id },
+        body: JSON.stringify({ public_certificate_search_enabled: enabled })
+      });
+      const parsed = OrganizationPublicSearchResponseSchema.safeParse(await response.json());
+      if (!response.ok || !parsed.success) throw new Error("setting update failed");
+      setState((current) => current.kind !== "ready" ? current : { kind: "ready", data: {
+        ...current.data, organization: parsed.data.data
+      } });
+      setSettingState("saved");
+    } catch { setSettingState("error"); }
+  };
+
   return <div className="space-y-7">
     {primaryMetrics.length === 0 ? <section className="rounded-xl border border-slate-200 bg-white px-5 py-6" role="status">
       <h2 className="font-semibold text-slate-950">ไม่มีข้อมูลสรุปที่เปิดให้ดู</h2><p className="mt-1 text-sm leading-6 text-slate-600">ระบบจะแสดงเฉพาะข้อมูลที่สิทธิ์ของคุณอนุญาต</p>
@@ -106,6 +127,35 @@ export function AdminDashboard({ membership }: { readonly membership: Membership
         </div>
       </DashboardSection>
     </div>
+
+    <DashboardSection id="public-search-setting-title" title="การค้นหาใบประกาศสาธารณะ"
+      description="กำหนดว่าผู้รับใบประกาศสามารถค้นหาใบประกาศขององค์กรนี้ได้หรือไม่">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-sm leading-6 text-slate-700">เมื่อเปิดใช้งาน ผู้รับใบประกาศสามารถค้นหาใบประกาศด้วยชื่อพร้อมข้อมูลโครงการหรือการอบรม และดาวน์โหลดใบประกาศที่พร้อมใช้งานได้</p>
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">ผลการค้นหาอาจแสดงชื่อผู้รับ โครงการ การอบรม เลขที่ใบประกาศ และวันที่ออก</div>
+          </div>
+          <div className="shrink-0">
+            <button type="button" role="switch" aria-checked={data.organization.public_certificate_search_enabled}
+              disabled={!permissions.has("organization:update") || settingState === "saving"}
+              onClick={() => void updatePublicSearch(!data.organization.public_certificate_search_enabled)}
+              className={`inline-flex min-h-12 min-w-28 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition focus:outline-none focus:ring-3 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60 ${
+                data.organization.public_certificate_search_enabled ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-slate-300 bg-slate-50 text-slate-700"
+              }`}>
+              <span className={`size-2.5 rounded-full ${data.organization.public_certificate_search_enabled ? "bg-emerald-600" : "bg-slate-400"}`} aria-hidden="true" />
+              {data.organization.public_certificate_search_enabled ? "เปิดใช้งาน" : "ปิดใช้งาน"}
+            </button>
+            {!permissions.has("organization:update") ? <p className="mt-2 max-w-36 text-xs leading-5 text-slate-500">คุณไม่มีสิทธิ์เปลี่ยนการตั้งค่านี้</p> : null}
+          </div>
+        </div>
+        <div className="mt-3 min-h-5 text-sm" aria-live="polite">
+          {settingState === "saving" ? <span className="text-slate-600">กำลังบันทึก…</span> : null}
+          {settingState === "saved" ? <span className="font-medium text-emerald-700">บันทึกการตั้งค่าแล้ว</span> : null}
+          {settingState === "error" ? <span className="font-medium text-red-700" role="alert">ไม่สามารถบันทึกได้ กรุณาลองอีกครั้ง</span> : null}
+        </div>
+      </div>
+    </DashboardSection>
 
     {attention.length > 0 ? <DashboardSection id="dashboard-attention-title" title="สิ่งที่ควรดำเนินการ" description="คำแนะนำจากสถานะปัจจุบันขององค์กร">
       <div className="grid gap-3 lg:grid-cols-2">{attention.map((item) => <article className="flex min-w-0 flex-col gap-4 rounded-xl border border-amber-200 bg-amber-50/70 p-4 sm:flex-row sm:items-center" key={item.title}>

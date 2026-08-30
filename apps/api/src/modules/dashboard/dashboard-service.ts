@@ -19,6 +19,7 @@ export class DashboardService {
       jobs: permissions.has("job:read")
     });
     return {
+      organization: { public_certificate_search_enabled: result.organization.publicCertificateSearchEnabled },
       ...(result.projects === undefined ? {} : { projects: result.projects }),
       ...(result.trainings === undefined ? {} : { trainings: result.trainings }),
       ...(result.participants === undefined ? {} : { participants: result.participants }),

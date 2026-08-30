@@ -25,5 +25,6 @@ export * from "./storage-cleanup-repository.js";
 export * from "./public-download-authorization-repository.js";
 export * from "./public-certificate-download-repository.js";
 export * from "./public-verification-repository.js";
+export * from "./public-certificate-search-repository.js";
 export * from "./dashboard-repository.js";
 export type * from "./types.js";

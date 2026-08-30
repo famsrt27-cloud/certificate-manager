@@ -46,3 +46,12 @@ export {
   type CertificateVerificationTokenInput,
   type VerifiedCertificateVerificationToken
 } from "./certificate-verification-token.js";
+export {
+  CERTIFICATE_SEARCH_RESULT_TOKEN_MAX_BYTES,
+  CERTIFICATE_SEARCH_RESULT_TOKEN_MAX_TTL_SECONDS,
+  InvalidCertificateSearchResultTokenError,
+  createCertificateSearchResultToken,
+  verifyCertificateSearchResultToken,
+  type CertificateSearchResultTokenInput,
+  type VerifiedCertificateSearchResultToken
+} from "./certificate-search-result-token.js";
