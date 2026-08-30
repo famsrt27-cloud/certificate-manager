@@ -23,16 +23,29 @@ const thaiDate = (value: string): string => new Intl.DateTimeFormat("th-TH", {
   day: "numeric", month: "long", year: "numeric", timeZone: "UTC"
 }).format(new Date(`${value}T00:00:00Z`));
 
-type SuggestionState = "idle" | "loading" | "ready" | "error";
+const SUGGESTION_DEBOUNCE_MS = 400;
+const SUGGESTION_CACHE_LIMIT = 20;
 
-function SearchableCombobox({ disabled = false, label, onChange, onSelect, placeholder, requestBody,
+type SuggestionState = "idle" | "loading" | "ready" | "rate-limited" | "error";
+type SuggestionKind = "project" | "training";
+
+const retryAfterMilliseconds = (value: string | null): number => {
+  if (value === null) return 1_000;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.max(1_000, Math.ceil(seconds * 1_000));
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? 1_000 : Math.max(1_000, date - Date.now());
+};
+
+function SearchableCombobox({ disabled = false, kind, label, onChange, onSelect, placeholder, projectName,
   selectedValue, value }: Readonly<{
   disabled?: boolean;
+  kind: SuggestionKind;
   label: string;
   onChange: (value: string) => void;
   onSelect: (value: string) => void;
   placeholder: string;
-  requestBody: (query: string) => object;
+  projectName?: string | null;
   selectedValue: string | null;
   value: string;
 }>) {
@@ -42,31 +55,72 @@ function SearchableCombobox({ disabled = false, label, onChange, onSelect, place
   const [suggestions, setSuggestions] = useState<readonly string[]>([]);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const cache = useRef(new Map<string, readonly string[]>());
+  const requestGeneration = useRef(0);
+  const blockedUntil = useRef(0);
   const normalized = value.normalize("NFKC").trim().replace(/\s+/gu, " ");
+  const normalizedProject = projectName?.normalize("NFKC").trim().replace(/\s+/gu, " ") ?? "";
 
   useEffect(() => {
-    if (disabled || selectedValue === value || normalized.length < 2) {
+    const generation = ++requestGeneration.current;
+    if (disabled || selectedValue?.normalize("NFKC").trim().replace(/\s+/gu, " ") === normalized
+      || normalized.length < 2) {
       return;
+    }
+    const cacheKey = `${kind}:${normalizedProject}:${normalized}`;
+    const cached = cache.current.get(cacheKey);
+    if (cached !== undefined) {
+      cache.current.delete(cacheKey); cache.current.set(cacheKey, cached);
+      const timeout = window.setTimeout(() => {
+        if (generation !== requestGeneration.current) return;
+        setSuggestions(cached); setState("ready"); setOpen(true); setActiveIndex(-1);
+      }, 0);
+      return () => window.clearTimeout(timeout);
+    }
+    if (Date.now() < blockedUntil.current) {
+      const timeout = window.setTimeout(() => {
+        if (generation !== requestGeneration.current) return;
+        setSuggestions([]); setState("rate-limited"); setOpen(true); setActiveIndex(-1);
+      }, 0);
+      return () => window.clearTimeout(timeout);
     }
     const controller = new AbortController();
     const timeout = window.setTimeout(() => {
       setState("loading"); setOpen(true);
-      void postJson(label === "โครงการ" ? projectSuggestionsEndpoint : trainingSuggestionsEndpoint,
-        requestBody(normalized), controller.signal)
+      const endpoint = kind === "project" ? projectSuggestionsEndpoint : trainingSuggestionsEndpoint;
+      const body = kind === "project" ? { query: normalized } : {
+        query: normalized, ...(normalizedProject.length === 0 ? {} : { project_name: normalizedProject })
+      };
+      void postJson(endpoint, body, controller.signal)
         .then(async (response) => {
+          if (response.status === 429) {
+            blockedUntil.current = Date.now() + retryAfterMilliseconds(response.headers.get("retry-after"));
+            if (generation === requestGeneration.current) {
+              setSuggestions([]); setState("rate-limited"); setOpen(true); setActiveIndex(-1);
+            }
+            return;
+          }
           const parsed = PublicCertificateSuggestionResponseSchema.safeParse(await response.json());
           if (!response.ok || !parsed.success) throw new Error("suggestions unavailable");
-          setSuggestions(parsed.data.data.suggestions.map((item) => item.label));
+          if (generation !== requestGeneration.current) return;
+          const nextSuggestions = parsed.data.data.suggestions.map((item) => item.label);
+          cache.current.set(cacheKey, nextSuggestions);
+          if (cache.current.size > SUGGESTION_CACHE_LIMIT) {
+            const oldest = cache.current.keys().next().value;
+            if (oldest !== undefined) cache.current.delete(oldest);
+          }
+          setSuggestions(nextSuggestions);
           setState("ready"); setActiveIndex(-1);
         })
         .catch((reason: unknown) => {
-          if (!(reason instanceof DOMException && reason.name === "AbortError")) {
+          if (generation === requestGeneration.current
+            && !(reason instanceof DOMException && reason.name === "AbortError")) {
             setSuggestions([]); setState("error"); setOpen(true);
           }
         });
-    }, 250);
+    }, SUGGESTION_DEBOUNCE_MS);
     return () => { window.clearTimeout(timeout); controller.abort(); };
-  }, [disabled, label, normalized, requestBody, selectedValue, value]);
+  }, [disabled, kind, normalized, normalizedProject, selectedValue]);
 
   const choose = (suggestion: string) => {
     onSelect(suggestion); setSuggestions([]); setState("idle"); setOpen(false); setActiveIndex(-1);
@@ -84,15 +138,18 @@ function SearchableCombobox({ disabled = false, label, onChange, onSelect, place
     <input id={inputId} role="combobox" aria-autocomplete="list" aria-controls={listboxId}
       aria-expanded={open} aria-activedescendant={activeIndex < 0 ? undefined : `${listboxId}-${activeIndex}`}
       autoComplete="off" disabled={disabled} maxLength={200} placeholder={placeholder} value={value}
-      onBlur={() => setOpen(false)} onChange={(event) => { onChange(event.target.value); setOpen(true); }}
+      onBlur={() => setOpen(false)} onChange={(event) => {
+        setSuggestions([]); setState("idle"); setActiveIndex(-1); onChange(event.target.value); setOpen(true);
+      }}
       onFocus={() => { if (normalized.length >= 2 && selectedValue !== value) setOpen(true); }} onKeyDown={handleKeyDown}
       className="min-h-12 w-full rounded-xl border border-[#c9d0cc] bg-white px-4 pr-10 outline-none transition placeholder:text-[#929b97] focus:border-[#427d7d] focus:ring-3 focus:ring-[#b8d5ce]/50 disabled:cursor-not-allowed disabled:bg-[#f0f1ee]" />
     <span className="pointer-events-none absolute bottom-4 right-4 text-[#60726e]" aria-hidden="true">⌄</span>
-    <div className="sr-only" role="status" aria-live="polite">{state === "loading" ? `กำลังค้นหา${label}` : state === "ready" ? `พบ ${suggestions.length} รายการ` : state === "error" ? `ไม่สามารถค้นหา${label}ได้` : ""}</div>
-    {open && normalized.length >= 2 ? <div id={listboxId} role="listbox" className="absolute z-30 mt-2 max-h-60 w-full overflow-auto rounded-xl border border-[#cbd4cf] bg-white p-1.5 shadow-[0_16px_36px_rgba(31,54,48,.14)]">
+    <div className="sr-only" role="status" aria-live="polite">{state === "loading" ? `กำลังค้นหา${label}` : state === "ready" ? `พบ ${suggestions.length} รายการ` : state === "rate-limited" ? "ค้นหาบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่" : state === "error" ? `ไม่สามารถค้นหา${label}ได้` : ""}</div>
+    {open && !disabled && normalized.length >= 2 ? <div id={listboxId} role="listbox" className="absolute z-30 mt-2 max-h-60 w-full overflow-auto rounded-xl border border-[#cbd4cf] bg-white p-1.5 shadow-[0_16px_36px_rgba(31,54,48,.14)]">
       {state === "loading" ? <p className="px-3 py-3 text-sm text-[#65716d]">กำลังค้นหา…</p> : null}
-      {state === "ready" && suggestions.length === 0 ? <p className="px-3 py-3 text-sm text-[#65716d]">ไม่พบรายการที่ตรงกัน ลองพิมพ์คำอื่น</p> : null}
-      {state === "error" ? <p className="px-3 py-3 text-sm text-[#7c342d]">ไม่สามารถโหลดรายการได้ กรุณาลองอีกครั้ง</p> : null}
+      {state === "ready" && suggestions.length === 0 ? <p className="px-3 py-3 text-sm text-[#65716d]">ไม่พบ{label}ที่ตรงกับคำค้น</p> : null}
+      {state === "rate-limited" ? <p className="px-3 py-3 text-sm text-[#7c342d]">ค้นหาบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่</p> : null}
+      {state === "error" ? <p className="px-3 py-3 text-sm text-[#7c342d]">ไม่สามารถค้นหา{label}ได้ กรุณาลองอีกครั้ง</p> : null}
       {suggestions.map((suggestion, index) => <button id={`${listboxId}-${index}`} key={suggestion} role="option"
         aria-selected={activeIndex === index} type="button" onMouseDown={(event) => event.preventDefault()}
         onClick={() => choose(suggestion)}
@@ -177,14 +234,12 @@ export function SearchablePublicSearchPanel() {
       <p className="mt-3 text-sm leading-6 text-[#667176]">กรอกชื่อผู้รับพร้อมเลือกโครงการหรือการอบรม</p>
       <form className="mt-6 space-y-4" onSubmit={(event) => void search(event)} noValidate>
         <div><label className="mb-1.5 block text-sm font-semibold text-[#34494b]" htmlFor="recipient-name">ชื่อผู้รับใบประกาศ</label><input id="recipient-name" value={recipientName} onChange={(event) => setRecipientName(event.target.value)} autoComplete="name" maxLength={200} disabled={exactMode} className="min-h-12 w-full rounded-xl border border-[#c9d0cc] bg-white px-4 outline-none transition focus:border-[#427d7d] focus:ring-3 focus:ring-[#b8d5ce]/50 disabled:bg-[#f0f1ee]" /><p className="mt-1.5 text-xs text-[#75807c]">กรอกชื่อด้วยตนเอง ระบบจะไม่แนะนำชื่อผู้รับ</p></div>
-        <SearchableCombobox label="โครงการ" placeholder="พิมพ์ชื่อโครงการ" disabled={exactMode}
+        <SearchableCombobox kind="project" label="โครงการ" placeholder="พิมพ์ชื่อโครงการ" disabled={exactMode}
           value={projectInput} selectedValue={projectName}
-          requestBody={(query) => ({ query })}
           onChange={(value) => { setProjectInput(value); setProjectName(null); setTrainingInput(""); setTrainingName(null); }}
           onSelect={(value) => { setProjectInput(value); setProjectName(value); setTrainingInput(""); setTrainingName(null); }} />
-        <SearchableCombobox label="การอบรม" placeholder="พิมพ์ชื่อการอบรม"
+        <SearchableCombobox kind="training" label="การอบรม" placeholder="พิมพ์ชื่อการอบรม" projectName={projectName}
           disabled={exactMode} value={trainingInput} selectedValue={trainingName}
-          requestBody={(query) => ({ query, ...(projectName === null ? {} : { project_name: projectName }) })}
           onChange={(value) => { setTrainingInput(value); setTrainingName(null); }}
           onSelect={(value) => { setTrainingInput(value); setTrainingName(value); }} />
         <div className="flex items-center gap-3 py-1 text-xs font-medium text-[#89908e]" aria-hidden="true"><span className="h-px flex-1 bg-[#e1e3df]" /><span>หรือค้นหาด้วยเลขที่</span><span className="h-px flex-1 bg-[#e1e3df]" /></div>

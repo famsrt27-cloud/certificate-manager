@@ -14,6 +14,10 @@ const publicIdentifier = "b".repeat(32);
 const record = { publicIdentifier, certificateNumber: "CERT-2569-001", recipientName: "สมชาย ใจดี",
   projectName: "โครงการดิจิทัล", trainingName: "การอบรมความปลอดภัย", issuedAt: now };
 const allowed = { consume: async () => ({ allowed: true as const, retryAfterSeconds: 0 }) };
+const suggestionRateLimiters = {
+  projectSuggestionRateLimiter: allowed,
+  trainingSuggestionRateLimiter: allowed
+};
 const generic = (requestId: unknown) => ({ error: { code: "PUBLIC_REQUEST_FAILED",
   message: "The request could not be completed." }, meta: { request_id: requestId } });
 
@@ -22,6 +26,7 @@ describe("public certificate search routes", () => {
     const search = vi.fn(async () => records);
     const app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
       readinessTimeoutMs: 100, logger: false, publicCertificateSearch: { rateLimiter: allowed,
+        ...suggestionRateLimiters,
         service: new PublicCertificateSearchService({ repository: { search,
           suggestProjects: async () => [], suggestTrainings: async () => [] }, activeSigningKeyId: "public-key",
           activeSigningKey: key, ttlSeconds: 180, now: () => now }) } });
@@ -83,7 +88,8 @@ describe("public certificate search routes", () => {
       readinessTimeoutMs: 100, logger: false, publicCertificateSearch: { service: new PublicCertificateSearchService({
         repository: { search: async () => [], suggestProjects: async () => [], suggestTrainings: async () => [] },
         activeSigningKeyId: "public-key", activeSigningKey: key,
-        ttlSeconds: 180 }), rateLimiter: { consume: async () => ({ allowed: false, retryAfterSeconds: 23 }) } } });
+        ttlSeconds: 180 }), ...suggestionRateLimiters,
+        rateLimiter: { consume: async () => ({ allowed: false, retryAfterSeconds: 23 }) } } });
     await limited.ready();
     const response = await request(limited.server).post("/api/public/certificates/search").send({});
     expect(response.status).toBe(429);
@@ -109,6 +115,7 @@ describe("public certificate search routes", () => {
     const suggestTrainings = vi.fn(async () => Array.from({ length: 12 }, (_, index) => `อบรมภาษาไทย ${index}`));
     const app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
       readinessTimeoutMs: 100, logger: false, publicCertificateSearch: { rateLimiter: allowed,
+        ...suggestionRateLimiters,
         service: new PublicCertificateSearchService({ repository: { search: async () => [], suggestProjects,
           suggestTrainings }, activeSigningKeyId: "public-key", activeSigningKey: key, ttlSeconds: 180 }) } });
     await app.ready();
@@ -133,14 +140,20 @@ describe("public certificate search routes", () => {
     await app.close();
   });
 
-  it("rate limits suggestions before validating or querying", async () => {
+  it.each([
+    ["project-suggestions", "projectSuggestionRateLimiter"],
+    ["training-suggestions", "trainingSuggestionRateLimiter"]
+  ] as const)("rate limits %s in its suggestion bucket before validating or querying", async (endpoint, limiter) => {
+    const blocked = { consume: async () => ({ allowed: false as const, retryAfterSeconds: 19 }) };
     const limited = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined },
-      readinessTimeoutMs: 100, logger: false, publicCertificateSearch: { rateLimiter: {
-        consume: async () => ({ allowed: false, retryAfterSeconds: 19 }) }, service: new PublicCertificateSearchService({
+      readinessTimeoutMs: 100, logger: false, publicCertificateSearch: { rateLimiter: allowed,
+        projectSuggestionRateLimiter: limiter === "projectSuggestionRateLimiter" ? blocked : allowed,
+        trainingSuggestionRateLimiter: limiter === "trainingSuggestionRateLimiter" ? blocked : allowed,
+        service: new PublicCertificateSearchService({
           repository: { search: async () => [], suggestProjects: async () => [], suggestTrainings: async () => [] },
           activeSigningKeyId: "public-key", activeSigningKey: key, ttlSeconds: 180 }) } });
     await limited.ready();
-    const response = await request(limited.server).post("/api/public/certificates/project-suggestions").send({});
+    const response = await request(limited.server).post(`/api/public/certificates/${endpoint}`).send({});
     expect(response.status).toBe(429);
     expect(response.headers["retry-after"]).toBe("19");
     expect(response.body).toEqual(generic(expect.any(String)));

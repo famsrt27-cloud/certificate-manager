@@ -172,6 +172,18 @@ const publicCertificateSearchRateLimiter = new PublicVerificationRateLimiter(aut
   networkMaximum: environment.PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_NETWORK_MAX,
   keyPrefix: "public:certificate-search-rate:v1:"
 });
+const publicProjectSuggestionRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:project-suggestion-rate:v1:"
+});
+const publicTrainingSuggestionRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:training-suggestion-rate:v1:"
+});
 const publicSearchDownloadAuthorizationService = new PublicSearchDownloadAuthorizationService({
   verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
   activeSigningKeyId: environment.VERIFICATION_ACTIVE_KID,
@@ -221,7 +233,9 @@ const app = buildApi({
   publicCertificateDownload: { service: publicCertificateDownloadService,
     rateLimiter: publicCertificateDownloadRateLimiter },
   publicCertificateSearch: { service: publicCertificateSearchService,
-    rateLimiter: publicCertificateSearchRateLimiter },
+    rateLimiter: publicCertificateSearchRateLimiter,
+    projectSuggestionRateLimiter: publicProjectSuggestionRateLimiter,
+    trainingSuggestionRateLimiter: publicTrainingSuggestionRateLimiter },
   publicSearchDownloadAuthorization: { service: publicSearchDownloadAuthorizationService,
     rateLimiter: publicSearchDownloadAuthorizationRateLimiter }
 });

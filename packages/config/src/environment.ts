@@ -137,6 +137,8 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(1_000).default(10),
   PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
   PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(100).default(5),
+  PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
+  PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(1_000).default(30),
   PUBLIC_SEARCH_RESULT_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(300).default(180),
   PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(10).max(3_600).default(60),
   PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX: z.coerce.number().int().min(1).max(100).default(10),

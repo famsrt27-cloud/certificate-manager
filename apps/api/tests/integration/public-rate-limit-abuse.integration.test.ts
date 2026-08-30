@@ -62,4 +62,28 @@ describe.skipIf(redisUrl === undefined)("public Redis rate-limit abuse integrati
     await redis.del(...verificationKeys);
     expect((await verification.consume("192.0.2.43")).allowed).toBe(true);
   });
+
+  it("allows 30 requests in each suggestion bucket while certificate search remains limited to 5", async () => {
+    const projectSuggestions = new PublicVerificationRateLimiter(store, {
+      ...configuration, networkMaximum: 30, keyPrefix: `${namespace}project-suggestion-policy:`
+    });
+    const trainingSuggestions = new PublicVerificationRateLimiter(store, {
+      ...configuration, networkMaximum: 30, keyPrefix: `${namespace}training-suggestion-policy:`
+    });
+    const certificateSearch = new PublicVerificationRateLimiter(store, {
+      ...configuration, networkMaximum: 5, keyPrefix: `${namespace}certificate-search-policy:`
+    });
+    const consume = async (limiter: PublicVerificationRateLimiter, count: number) =>
+      Promise.all(Array.from({ length: count }, () => limiter.consume("192.0.2.44")));
+
+    const [projects, trainings, searches] = await Promise.all([
+      consume(projectSuggestions, 31), consume(trainingSuggestions, 31), consume(certificateSearch, 6)
+    ]);
+    expect(projects.filter((result) => result.allowed)).toHaveLength(30);
+    expect(trainings.filter((result) => result.allowed)).toHaveLength(30);
+    expect(searches.filter((result) => result.allowed)).toHaveLength(5);
+    expect(projects[30]?.allowed).toBe(false);
+    expect(trainings[30]?.allowed).toBe(false);
+    expect(searches[5]?.allowed).toBe(false);
+  });
 });

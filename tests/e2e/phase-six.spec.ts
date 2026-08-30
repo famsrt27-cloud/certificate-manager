@@ -169,6 +169,77 @@ test("direct page open offers bounded public search and QR verification without 
   expect(requests).toBe(0);
 });
 
+test("rapid project and training typing is debounced and normalized duplicate prefixes use memory", async ({ page }) => {
+  const requestBodies: Record<"project" | "training", string[]> = { project: [], training: [] };
+  await page.route("**/api/public/certificates/project-suggestions", (route) => {
+    requestBodies.project.push(route.request().postData() ?? "");
+    return fulfillJson(route, { data: { suggestions: [{ label: "โครงการพัฒนาทักษะดิจิทัล" }] },
+      meta: { request_id: requestId } });
+  });
+  await page.route("**/api/public/certificates/training-suggestions", (route) => {
+    requestBodies.training.push(route.request().postData() ?? "");
+    return fulfillJson(route, { data: { suggestions: [{ label: "การอบรมทักษะดิจิทัล" }] },
+      meta: { request_id: requestId } });
+  });
+  await page.goto("/verify");
+
+  const project = page.getByRole("combobox", { name: "โครงการ" });
+  await project.pressSequentially("โครงการพัฒนาทักษะดิจิทัล", { delay: 25 });
+  await expect(page.getByRole("option", { name: "โครงการพัฒนาทักษะดิจิทัล" })).toBeVisible();
+  expect(requestBodies.project).toEqual([JSON.stringify({ query: "โครงการพัฒนาทักษะดิจิทัล" })]);
+  await project.fill("  โครงการพัฒนาทักษะดิจิทัล  ");
+  await page.waitForTimeout(500);
+  expect(requestBodies.project).toHaveLength(1);
+
+  const training = page.getByRole("combobox", { name: "การอบรม" });
+  await training.pressSequentially("การอบรมทักษะดิจิทัล", { delay: 25 });
+  await expect(page.getByRole("option", { name: "การอบรมทักษะดิจิทัล" })).toBeVisible();
+  expect(requestBodies.training).toEqual([JSON.stringify({ query: "การอบรมทักษะดิจิทัล" })]);
+});
+
+test("a stale project response cannot replace newer suggestions", async ({ page }) => {
+  let firstRequestStarted = false;
+  await page.route("**/api/public/certificates/project-suggestions", async (route) => {
+    const query = JSON.parse(route.request().postData() ?? "{}") as { query?: string };
+    if (query.query === "โค") {
+      firstRequestStarted = true;
+      await page.waitForTimeout(900);
+      await fulfillJson(route, { data: { suggestions: [{ label: "โครงการเก่า" }] },
+        meta: { request_id: requestId } }).catch(() => undefined);
+      return;
+    }
+    await fulfillJson(route, { data: { suggestions: [{ label: "โครงการใหม่" }] },
+      meta: { request_id: requestId } });
+  });
+  await page.goto("/verify");
+  const project = page.getByRole("combobox", { name: "โครงการ" });
+  await project.fill("โค");
+  await expect.poll(() => firstRequestStarted).toBe(true);
+  await project.fill("โครงการ");
+  await expect(page.getByRole("option", { name: "โครงการใหม่" })).toBeVisible();
+  await page.waitForTimeout(700);
+  await expect(page.getByRole("option", { name: "โครงการเก่า" })).toHaveCount(0);
+});
+
+for (const [label, endpoint] of [["โครงการ", "project-suggestions"], ["การอบรม", "training-suggestions"]] as const) {
+  test(`${label} suggestion 429 shows rate-limit feedback instead of no-match feedback`, async ({ page }) => {
+    let requests = 0;
+    await page.route(`**/api/public/certificates/${endpoint}`, (route) => {
+      requests += 1;
+      return route.fulfill({ status: 429, contentType: "application/json", headers: { "retry-after": "10" },
+        body: JSON.stringify(genericFailure) });
+    });
+    await page.goto("/verify");
+    const combobox = page.getByRole("combobox", { name: label });
+    await combobox.fill(label === "โครงการ" ? "โครงการ" : "การอบรม");
+    await expect(page.getByText("ค้นหาบ่อยเกินไป กรุณารอสักครู่แล้วลองใหม่", { exact: true }).last()).toBeVisible();
+    await expect(page.getByText(`ไม่พบ${label}ที่ตรงกับคำค้น`, { exact: true })).toHaveCount(0);
+    await combobox.fill(label === "โครงการ" ? "โครงการใหม่" : "การอบรมใหม่");
+    await page.waitForTimeout(500);
+    expect(requests).toBe(1);
+  });
+}
+
 test("recipient and independently selected training search downloads through the bounded capability flow", async ({ page }) => {
   const searchResultToken = "synthetic.search-result.token";
   const requests: Array<{ url: string; body: string | null }> = [];

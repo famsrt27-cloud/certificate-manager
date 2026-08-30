@@ -124,6 +124,8 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
         now, storage, repository: { findByPublicIdentifier: (identifier) =>
           findPublicCertificateDownload(database, identifier) } }) }
     , publicCertificateSearch: { rateLimiter: limiter("search"),
+      projectSuggestionRateLimiter: limiter("project-suggestion"),
+      trainingSuggestionRateLimiter: limiter("training-suggestion"),
       service: new PublicCertificateSearchService({ activeSigningKeyId: "active-key", activeSigningKey: activeKey,
         ttlSeconds: 180, now, repository: { search: (criteria, limit) =>
           findPublicCertificatesBySearch(database, criteria, limit),

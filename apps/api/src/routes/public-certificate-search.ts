@@ -14,16 +14,15 @@ const PUBLIC_ERROR_MESSAGE = "The request could not be completed.";
 export interface PublicCertificateSearchRouteOptions {
   readonly service: PublicCertificateSearchService;
   readonly rateLimiter: Pick<PublicVerificationRateLimiter, "consume">;
+  readonly projectSuggestionRateLimiter: Pick<PublicVerificationRateLimiter, "consume">;
+  readonly trainingSuggestionRateLimiter: Pick<PublicVerificationRateLimiter, "consume">;
 }
 
 export const registerPublicCertificateSearchRoutes = (
   app: FastifyInstance, options: PublicCertificateSearchRouteOptions
 ): void => {
-  const consumeRateLimit = async (request: Parameters<typeof options.rateLimiter.consume>[0]) =>
-    options.rateLimiter.consume(request);
-
   app.post("/api/public/certificates/project-suggestions", { bodyLimit: 1_024 }, async (request, reply) => {
-    const rateLimit = await consumeRateLimit(request.ip);
+    const rateLimit = await options.projectSuggestionRateLimiter.consume(request.ip);
     if (!rateLimit.allowed) return reply.status(429).header("retry-after", rateLimit.retryAfterSeconds)
       .send(createErrorResponse(PUBLIC_ERROR_CODE, PUBLIC_ERROR_MESSAGE, request.id));
     const parsed = PublicProjectSuggestionRequestSchema.safeParse(request.body);
@@ -33,7 +32,7 @@ export const registerPublicCertificateSearchRoutes = (
   });
 
   app.post("/api/public/certificates/training-suggestions", { bodyLimit: 1_024 }, async (request, reply) => {
-    const rateLimit = await consumeRateLimit(request.ip);
+    const rateLimit = await options.trainingSuggestionRateLimiter.consume(request.ip);
     if (!rateLimit.allowed) return reply.status(429).header("retry-after", rateLimit.retryAfterSeconds)
       .send(createErrorResponse(PUBLIC_ERROR_CODE, PUBLIC_ERROR_MESSAGE, request.id));
     const parsed = PublicTrainingSuggestionRequestSchema.safeParse(request.body);
