@@ -16,6 +16,7 @@ const session = (permissions: string[], multiple = false) => ({ data: {
 }, meta: { request_id: requestId } });
 
 const populated = { data: {
+  organization: { public_certificate_search_enabled: false },
   projects: { active: 3, total: 4 }, trainings: { active: 6, total: 7 }, participants: { total: 128 },
   templates: { active: 2, published_versions: 1 }, certificates: { available: 42, in_progress: 3, revoked: 2 },
   jobs: { queued: 1, running: 2, failed: 0, dead_letter: 0 }
@@ -59,9 +60,27 @@ test("sidebar navigation opens every real route and follows the active path", as
   }
 });
 
+test("mobile admin navigation traps focus and returns it to the menu button", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  await routeSession(page);
+  await page.route("**/api/admin/dashboard", (route) => route.fulfill({ json: populated }));
+  await page.goto("/admin");
+  const opener = page.getByRole("button", { name: "เปิดเมนู" });
+  await opener.click();
+  const drawer = page.getByRole("dialog", { name: "เมนูผู้ดูแลระบบ" });
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "ปิดเมนู" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(drawer.getByRole("button", { name: "ออกจากระบบ" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});
+
 test("empty dashboard attention provides permission-aware route actions", async ({ page }) => {
   await routeSession(page);
   await page.route("**/api/admin/dashboard", (route) => route.fulfill({ json: { data: {
+    organization: { public_certificate_search_enabled: false },
     projects: { active: 0, total: 0 }, trainings: { active: 0, total: 0 }, participants: { total: 0 },
     templates: { active: 0, published_versions: 0 }, certificates: { available: 0, in_progress: 0, revoked: 0 },
     jobs: { queued: 0, running: 0, failed: 0, dead_letter: 0 }
@@ -97,7 +116,7 @@ test("organization switch clears stale dashboard totals", async ({ page }) => {
   await page.route("**/api/admin/dashboard", async (route) => {
     const selected = route.request().headers()["x-organization-id"];
     if (selected === organizationB) await new Promise<void>((resolve) => { releaseSecond = resolve; });
-    await route.fulfill({ json: { data: { projects: { active: selected === organizationA ? 11 : 22, total: selected === organizationA ? 11 : 22 } }, meta: { request_id: requestId } } });
+    await route.fulfill({ json: { data: { organization: { public_certificate_search_enabled: false }, projects: { active: selected === organizationA ? 11 : 22, total: selected === organizationA ? 11 : 22 } }, meta: { request_id: requestId } } });
   });
   await page.goto("/admin");
   await expect(page.getByText("11", { exact: true })).toBeVisible();
@@ -111,6 +130,7 @@ test("organization switch clears stale dashboard totals", async ({ page }) => {
 test("dashboard omits unauthorized metrics and creation actions", async ({ page }) => {
   await routeSession(page, ["organization:read", "project:read", "training:read", "template:read"]);
   await page.route("**/api/admin/dashboard", (route) => route.fulfill({ json: { data: {
+    organization: { public_certificate_search_enabled: false },
     projects: { active: 0, total: 0 }, trainings: { active: 0, total: 0 }, templates: { active: 0, published_versions: 0 }
   }, meta: { request_id: requestId } } }));
   await page.goto("/admin");

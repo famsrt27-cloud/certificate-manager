@@ -3,7 +3,7 @@
 import type { AuthenticationData } from "@certificate-platform/contracts";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { BrandMark } from "../brand-mark";
 import { Button } from "../ui/button";
@@ -111,6 +111,9 @@ export function AdminShell({
   userEmail
 }: AdminShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mobileMenu = useRef<HTMLElement>(null);
+  const mobileMenuButton = useRef<HTMLButtonElement>(null);
+  const mobileCloseButton = useRef<HTMLButtonElement>(null);
   const pathname = usePathname();
   const activeMembership = memberships.find((membership) => membership.id === activeMembershipId) ?? null;
   const currentNavigation = navigation.find((item) => item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href));
@@ -119,12 +122,24 @@ export function AdminShell({
     if (!mobileOpen) return;
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setMobileOpen(false);
+      if (event.key !== "Tab") return;
+      const focusable = [...(mobileMenu.current?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), select:not([disabled]), a[href]'
+      ) ?? [])];
+      if (focusable.length === 0) return;
+      const first = focusable[0]!; const last = focusable.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
+    const menuButton = mobileMenuButton.current;
     document.addEventListener("keydown", handleEscape);
     document.body.style.overflow = "hidden";
+    const focusTimer = window.setTimeout(() => mobileCloseButton.current?.focus(), 0);
     return () => {
+      window.clearTimeout(focusTimer);
       document.removeEventListener("keydown", handleEscape);
       document.body.style.overflow = "";
+      window.setTimeout(() => menuButton?.focus(), 0);
     };
   }, [mobileOpen]);
 
@@ -139,10 +154,10 @@ export function AdminShell({
       {mobileOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden">
           <button className="absolute inset-0 bg-slate-950/45" aria-label="ปิดเมนู" onClick={() => setMobileOpen(false)} type="button" />
-          <aside className="relative flex h-full w-[min(85vw,300px)] flex-col bg-white px-4 py-5 shadow-2xl" id="admin-mobile-navigation" aria-label="แถบนำทางผู้ดูแลระบบ">
+          <aside aria-label="เมนูผู้ดูแลระบบ" aria-modal="true" className="relative flex h-full w-[min(85vw,300px)] flex-col bg-white px-4 py-5 shadow-2xl" id="admin-mobile-navigation" ref={mobileMenu} role="dialog">
             <div className="flex items-center justify-between gap-4 px-2">
               <BrandMark />
-              <button className="grid size-10 shrink-0 place-items-center rounded-lg text-slate-600 hover:bg-slate-100" aria-label="ปิดเมนู" onClick={() => setMobileOpen(false)} type="button">
+              <button className="grid size-10 shrink-0 place-items-center rounded-lg text-slate-600 hover:bg-slate-100" aria-label="ปิดเมนู" onClick={() => setMobileOpen(false)} ref={mobileCloseButton} type="button">
                 <MenuIcon open />
               </button>
             </div>
@@ -159,6 +174,7 @@ export function AdminShell({
           aria-label="เปิดเมนู"
           className="mr-3 grid size-10 shrink-0 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 lg:hidden"
           onClick={() => setMobileOpen(true)}
+          ref={mobileMenuButton}
           type="button"
         >
           <MenuIcon />

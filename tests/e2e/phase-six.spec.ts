@@ -288,6 +288,26 @@ test("recipient and independently selected training search downloads through the
     .toEqual({ local: 0, session: 0 });
 });
 
+test("changing public search criteria clears stale capabilities and explains locked search modes", async ({ page }) => {
+  await page.route("**/api/public/certificates/search", (route) => fulfillJson(route, { data: { too_broad: false, results: [{
+    certificate_number: "CERT-2569-001", recipient_name: "สมชาย ใจดี", project_name: "โครงการดิจิทัล",
+    training_name: "การอบรมความปลอดภัย", issued_at: "2026-08-30", status: "available",
+    search_result_token: "synthetic.search-result.token"
+  }] }, meta: { request_id: requestId } }));
+  await page.goto("/verify");
+  await page.getByLabel("เลขที่ใบประกาศ").fill("CERT-2569-001");
+  await expect(page.getByText("กำลังค้นหาด้วยเลขที่ใบประกาศ")).toBeVisible();
+  await page.getByRole("button", { name: "ค้นหาใบประกาศ", exact: true }).click();
+  await expect(page.getByRole("article")).toBeVisible();
+  await page.getByRole("button", { name: "ล้างเลขที่เพื่อค้นหาด้วยชื่อ" }).click();
+  await expect(page.getByRole("article")).toHaveCount(0);
+  await expect(page.getByLabel("ชื่อผู้รับใบประกาศ")).toBeEnabled();
+  await page.getByLabel("ชื่อผู้รับใบประกาศ").fill("สมชาย ใจดี");
+  await expect(page.getByText("กำลังค้นหาด้วยชื่อและบริบท")).toBeVisible();
+  await page.getByRole("button", { name: "ล้างข้อมูลเพื่อใช้เลขที่ใบประกาศ" }).click();
+  await expect(page.getByLabel("เลขที่ใบประกาศ")).toBeEnabled();
+});
+
 test("name-only search stays client-side and project plus training search gives no partial directory", async ({ page }) => {
   let requests = 0;
   let searchBody: string | null = null;
@@ -340,7 +360,7 @@ test("public root links recipients to search and administrators to login without
   expect(await page.locator("body").textContent()).not.toMatch(/Phase|Template Management|tenant-scoped|immutable publishing/i);
 });
 
-for (const width of [375, 390, 768, 1280]) {
+for (const width of [320, 375, 390, 768, 1280]) {
   test(`public verification has no horizontal overflow at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/verify");
