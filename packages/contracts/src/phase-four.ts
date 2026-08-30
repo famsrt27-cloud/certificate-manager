@@ -7,7 +7,18 @@ import { z } from "zod";
 import { RequestMetaSchema } from "./foundation.js";
 import { RecordStatusSchema } from "./phase-three.js";
 
-export { TemplateDefinitionSchema } from "@certificate-platform/template-engine";
+export {
+  CUSTOM_PAGE_MAX_MM,
+  CUSTOM_PAGE_MIN_MM,
+  PAGE_PRESETS,
+  TemplateDefinitionSchema,
+  describeLogicalPage,
+  pageAspectRatio,
+  pageForCustomMillimeters,
+  pageForPreset,
+  type PageOrientation,
+  type PagePresetId
+} from "@certificate-platform/template-engine";
 
 const ResourceNameSchema = z.string().trim().min(1).max(200);
 const CursorSchema = z.string().min(1).max(2_048);
@@ -29,8 +40,13 @@ export const TemplateListQuerySchema = z.object({
   cursor: CursorSchema.optional(), limit: z.coerce.number().int().min(1).max(100).default(50),
   status: RecordStatusSchema.optional()
 }).strict();
+export const TemplateListPreviewSchema = z.object({
+  version_id: z.uuid().optional(), version: z.number().int().positive(), status: TemplateVersionStatusSchema,
+  definition: TemplateDefinitionSchema
+});
+export const TemplateListItemSchema = TemplateSchema.extend({ preview: TemplateListPreviewSchema.nullable() });
 export const TemplateListResponseSchema = z.object({
-  data: z.array(TemplateSchema), meta: RequestMetaSchema.extend({ next_cursor: CursorSchema.nullable() })
+  data: z.array(TemplateListItemSchema), meta: RequestMetaSchema.extend({ next_cursor: CursorSchema.nullable() })
 });
 
 export const CreateTemplateVersionRequestSchema = z.object({ definition: TemplateDefinitionSchema }).strict();
@@ -67,6 +83,7 @@ export const TemplatePreviewResponseSchema = z.object({
 export type CreateTemplateRequest = z.infer<typeof CreateTemplateRequestSchema>;
 export type UpdateTemplateRequest = z.infer<typeof UpdateTemplateRequestSchema>;
 export type Template = z.infer<typeof TemplateSchema>;
+export type TemplateListItem = z.infer<typeof TemplateListItemSchema>;
 export type CreateTemplateVersionRequest = { readonly definition: TemplateDefinition };
 export type UpdateTemplateVersionRequest = { readonly definition: TemplateDefinition };
 export type TemplateVersion = z.infer<typeof TemplateVersionSchema>;

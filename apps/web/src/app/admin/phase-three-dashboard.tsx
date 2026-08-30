@@ -10,8 +10,13 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 const apiBasePath = process.env.NEXT_PUBLIC_API_BASE_PATH ?? "/api";
 type Membership = AuthenticationData["memberships"][number];
 type ImportInspection = ReturnType<typeof ParticipantImportInspectResponseSchema.parse>["data"];
+type ManagementView = "projects" | "trainings" | "participants";
 
-export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Membership; csrfToken: string }) {
+export function PhaseThreeDashboard({ membership, csrfToken, view }: {
+  membership: Membership;
+  csrfToken: string;
+  view: ManagementView;
+}) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [trainings, setTrainings] = useState<Training[]>([]);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -42,25 +47,25 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
 
   const refreshResources = useCallback(async () => {
     const requests: Promise<void>[] = [];
-    if (permissions.has("project:read")) requests.push(adminFetch("/admin/projects").then(async (response) => {
+    if ((view === "projects" || view === "trainings") && permissions.has("project:read")) requests.push(adminFetch("/admin/projects").then(async (response) => {
       const parsed = ProjectListResponseSchema.safeParse(await response.json());
       if (!response.ok || !parsed.success) throw new Error("projects");
       setProjects(parsed.data.data);
       setTrainingProjectId((current) => current || parsed.data.data[0]?.id || "");
     }));
-    if (permissions.has("training:read")) requests.push(adminFetch("/admin/trainings").then(async (response) => {
+    if ((view === "trainings" || view === "participants") && permissions.has("training:read")) requests.push(adminFetch("/admin/trainings").then(async (response) => {
       const parsed = TrainingListResponseSchema.safeParse(await response.json());
       if (!response.ok || !parsed.success) throw new Error("trainings");
       setTrainings(parsed.data.data);
       setImportTrainingId((current) => current || parsed.data.data[0]?.id || "");
     }));
-    if (permissions.has("participant:read")) requests.push(adminFetch("/admin/participants").then(async (response) => {
+    if (view === "participants" && permissions.has("participant:read")) requests.push(adminFetch("/admin/participants").then(async (response) => {
       const parsed = ParticipantListResponseSchema.safeParse(await response.json());
       if (!response.ok || !parsed.success) throw new Error("participants");
       setParticipants(parsed.data.data);
     }));
     try { await Promise.all(requests); } catch { setMessage("Unable to load Phase 3 resources."); }
-  }, [adminFetch, permissions]);
+  }, [adminFetch, permissions, view]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => void refreshResources(), 0);
@@ -132,11 +137,9 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
   };
 
   return (
-    <div className="space-y-8">
-      <div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold">{membership.organization.name}</h2>
-        <p className="mt-1 text-sm text-slate-600">{membership.roles.join(", ") || "No role"}</p></div>
+    <div className="space-y-6">
       {message && <p aria-live="polite" className="rounded-lg bg-slate-100 px-4 py-3">{message}</p>}
-      <div className="grid gap-6 lg:grid-cols-2">
+      {view === "projects" ? (
         <section className="rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="projects-title">
           <h2 className="text-xl font-semibold" id="projects-title">Projects</h2>
           {permissions.has("project:create") && <form className="mt-4 grid gap-3" onSubmit={(event) => void createProject(event)}>
@@ -146,6 +149,8 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
           </form>}
           <ul className="mt-4 space-y-2">{projects.map((project) => <li key={project.id}>{project.name} <span className="text-sm text-slate-500">({project.status})</span></li>)}</ul>
         </section>
+      ) : null}
+      {view === "trainings" ? (
         <section className="rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="trainings-title">
           <h2 className="text-xl font-semibold" id="trainings-title">Trainings</h2>
           {permissions.has("training:create") && <form className="mt-4 grid gap-3" onSubmit={(event) => void createTraining(event)}>
@@ -157,8 +162,8 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
           </form>}
           <ul className="mt-4 space-y-2">{trainings.map((training) => <li key={training.id}>{training.name} <span className="text-sm text-slate-500">{training.code}</span></li>)}</ul>
         </section>
-      </div>
-      {permissions.has("participant:import") && <section className="rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="import-title">
+      ) : null}
+      {view === "participants" && permissions.has("participant:import") && <section className="rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="import-title">
         <h2 className="text-xl font-semibold" id="import-title">Participant import</h2>
         <p className="mt-1 text-sm text-slate-600">CSV/XLSX: display_name and optional external_reference only.</p>
         <form className="mt-4 grid gap-3 md:grid-cols-3" onSubmit={(event) => void uploadImport(event)}>
@@ -178,7 +183,7 @@ export function PhaseThreeDashboard({ membership, csrfToken }: { membership: Mem
             {inspection.preview.map((row) => <tr key={row.row_number}><td>{row.row_number}</td><td>{row.display_name ?? "—"}</td><td>{row.external_reference ?? "—"}</td><td>{row.status}{row.validation_errors.length ? `: ${row.validation_errors.map((error) => error.code).join(", ")}` : ""}</td></tr>)}
           </tbody></table></div></div>}
       </section>}
-      {permissions.has("participant:read") && <section className="rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="participants-title">
+      {view === "participants" && permissions.has("participant:read") && <section className="rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="participants-title">
         <h2 className="text-xl font-semibold" id="participants-title">Participants</h2>
         <ul className="mt-4 grid gap-2">{participants.map((participant) => <li key={participant.id}>{participant.display_name}{participant.external_reference ? ` — ${participant.external_reference}` : ""}</li>)}</ul>
       </section>}

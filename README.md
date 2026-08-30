@@ -716,6 +716,19 @@ API_INTERNAL_BASE_URL=http://127.0.0.1:3001
 
 ## 11.1 Recommended local development model
 
+### One-click local startup (Windows)
+
+Double-click `start-local.cmd` from the repository root. The launcher checks for an
+already-running healthy stack, starts Docker Desktop when needed, starts PostgreSQL,
+Redis, MinIO, applies migrations, then starts Web, API, and Worker. When everything is
+ready it opens `http://localhost:3100/admin/participants` automatically.
+
+Keep the launcher window open while testing and press `Ctrl+C` to stop only the Web,
+API, and Worker processes created by that launcher. Runtime logs are written under
+`.local/logs/` and are excluded from source control. The launcher does not create or
+store administrator credentials; on a first local setup, run `pnpm dev:bootstrap-admin`
+once as documented in `docs/27-local-development-bootstrap.md`.
+
 จนกว่า Group 7 Docker/workspace fixes จะเสร็จ แนะนำ:
 
 ```text
@@ -844,7 +857,28 @@ pnpm db:migrate
 pnpm db:migrate:status
 ```
 
-## 12.3 Migration rule
+## 12.3 Create a local organization administrator
+
+The RBAC migration seeds roles and permissions only; it intentionally does not create a shared administrator credential. Create your own local `ORG_ADMIN` after migrations:
+
+```powershell
+pnpm dev:bootstrap-admin
+```
+
+The command prompts for an admin email, a masked password, and an organization name. It is transactional, refuses production and non-local database targets, stores only the canonical bcrypt hash, and leaves existing passwords unchanged unless `--reset-password` is supplied explicitly.
+
+Complete first-run sequence:
+
+```powershell
+docker compose up -d postgres redis minio
+pnpm db:migrate
+pnpm dev:bootstrap-admin
+pnpm dev
+```
+
+Then open `http://localhost:3000/admin/login` and use the credentials supplied to the bootstrap command. See `docs/27-local-development-bootstrap.md` for database GUI/CLI access and safety details.
+
+## 12.4 Migration rule
 
 เมื่อ migration ถูกใช้แล้ว:
 
@@ -854,7 +888,7 @@ pnpm db:migrate:status
 
 Initial migration อ้าง canonical schema snapshot และ checksum เพื่อป้องกัน schema drift
 
-## 12.4 Fresh DB reset
+## 12.5 Fresh DB reset
 
 ถ้าเป็น disposable development DB:
 
@@ -1925,6 +1959,7 @@ docs/23-threat-model.md
 docs/24-adr.md
 docs/25-ai-prompts.md
 docs/26-definition-of-done.md
+docs/27-local-development-bootstrap.md
 ```
 
 ### Important

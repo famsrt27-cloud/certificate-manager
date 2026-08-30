@@ -8,7 +8,8 @@ import {
   archivePublishedTemplateVersionInTransaction, archiveTemplateAssetInTransaction, archiveTemplateInTransaction,
   armStorageCleanup, cancelStorageCleanupInTransaction, completeStorageCleanupByKey,
   createTemplateAssetInTransaction, createTemplateInTransaction, createTemplateVersionInTransaction,
-  deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateAssetsByIds, findTemplateVersion, listTemplateAssets,
+  deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateAssetsByIds,
+  findTemplateImageAssetContent, findTemplateVersion, listTemplateAssets, listTemplatePreviewVersions,
   listTemplates, listTemplateVersions, publishTemplateVersionInTransaction, runAuditedTransaction,
   updateDraftTemplateVersionInTransaction, updateTemplateInTransaction,
   type DatabaseClient, type JsonValue, type NewAuditRecord
@@ -100,8 +101,12 @@ export class PhaseFourService {
     const rows = await listTemplates(this.#database, { organizationId, limit: input.limit,
       ...(cursor === undefined ? {} : { cursor }), ...(input.status === undefined ? {} : { status: input.status }) });
     const page = rows.slice(0, input.limit);
+    const previews = await listTemplatePreviewVersions(this.#database, organizationId, page.map((row) => row.id));
+    const previewByTemplate = new Map(previews.map((row) => [row.template_id, {
+      version_id: row.id, version: row.version, status: row.status, definition: parseDefinition(row.definition_json)
+    }]));
     const last = page.at(-1);
-    return { data: page.map(mapTemplate), nextCursor: rows.length > input.limit && last !== undefined
+    return { data: page.map((row) => ({ ...mapTemplate(row), preview: previewByTemplate.get(row.id) ?? null })), nextCursor: rows.length > input.limit && last !== undefined
       ? this.#cursors.encode({ organizationId, resource: "templates", createdAt: last.created_at, id: last.id }) : null };
   }
 
@@ -341,6 +346,26 @@ export class PhaseFourService {
   async getAsset(organizationId: string, templateId: string, assetId: string) {
     const row = await findTemplateAsset(this.#database, organizationId, templateId, assetId);
     return row === undefined ? notFound() : mapAsset(row);
+  }
+
+  async getActiveImageContent(organizationId: string, templateId: string, assetId: string, maximumBytes: number) {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) return validationFailed();
+    const row = await findTemplateImageAssetContent(this.#database, organizationId, templateId, assetId);
+    if (row === undefined || row.status !== "ACTIVE"
+      || (row.detected_mime_type !== "image/png" && row.detected_mime_type !== "image/jpeg")) return notFound();
+    const expectedSize = Number(row.size_bytes);
+    if (!Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > maximumBytes) return validationFailed();
+    let bytes: Uint8Array;
+    try {
+      bytes = await this.#storage.get(row.storage_key, maximumBytes);
+    } catch {
+      throw new ApplicationError("SERVICE_UNAVAILABLE", "The service is temporarily unavailable.", 503);
+    }
+    const actualHash = createHash("sha256").update(bytes).digest();
+    if (bytes.byteLength !== expectedSize || !actualHash.equals(Buffer.from(row.content_sha256))) {
+      throw new ApplicationError("SERVICE_UNAVAILABLE", "The service is temporarily unavailable.", 503);
+    }
+    return { bytes, mimeType: row.detected_mime_type } as const;
   }
 
   #auditRecord(context: TenantAuthorizationContext, action: AuditAction,

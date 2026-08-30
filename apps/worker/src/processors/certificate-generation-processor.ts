@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import {
   CERTIFICATE_RENDER_INPUT_VERSION,
-  CERTIFICATE_RENDERER_REVISION,
+  SUPPORTED_CERTIFICATE_RENDERER_REVISIONS,
   renderCertificatePdf,
   type CertificateRenderAsset,
   type CertificateRenderInput
@@ -86,7 +86,7 @@ export class CertificateGenerationProcessor {
     const beginning = await beginCertificateGenerationJob(this.#database, {
       organizationId: payload.organization_id,
       jobId: payload.job_id,
-      supportedRendererRevision: CERTIFICATE_RENDERER_REVISION
+      supportedRendererRevisions: SUPPORTED_CERTIFICATE_RENDERER_REVISIONS
     });
     if (beginning !== "READY") return;
 
@@ -115,7 +115,8 @@ export class CertificateGenerationProcessor {
   }
 
   async #processItem(item: ClaimedCertificateGenerationItem): Promise<void> {
-    if (item.rendererRevision !== CERTIFICATE_RENDERER_REVISION || item.verificationKeyKid.length === 0) {
+    if (!SUPPORTED_CERTIFICATE_RENDERER_REVISIONS.some((revision) => revision === item.rendererRevision)
+      || item.verificationKeyKid.length === 0) {
       throw new CertificateGenerationExecutionError(CERTIFICATE_GENERATION_ERROR_CODES.invalidJob);
     }
     const signingKey = this.#verificationKeys.get(item.verificationKeyKid);
@@ -156,7 +157,7 @@ export class CertificateGenerationProcessor {
     const verificationUrl = createCertificateVerificationUrl(this.#verificationBaseUrl, token);
     const renderInput: CertificateRenderInput = {
       inputVersion: CERTIFICATE_RENDER_INPUT_VERSION,
-      rendererRevision: CERTIFICATE_RENDERER_REVISION,
+      rendererRevision: item.rendererRevision as CertificateRenderInput["rendererRevision"],
       templateDefinition,
       bindings: {
         recipient: { displayName: item.recipientDisplayName },

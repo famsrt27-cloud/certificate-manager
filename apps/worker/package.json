@@ -21,7 +21,9 @@
     "csv-parse": "7.0.2",
     "exceljs": "4.4.0",
     "fastify": "5.12.0",
+    "jszip": "3.10.1",
     "pino": "10.3.1",
+    "saxes": "5.0.1",
     "yauzl": "3.4.0"
   },
   "devDependencies": {

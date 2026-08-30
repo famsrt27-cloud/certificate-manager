@@ -1,5 +1,11 @@
-import { AdminSession } from "./admin-session";
+"use client";
+
+import { AdminPageHeader } from "../../components/admin/admin-page-header";
+import { AdminDashboard } from "../../components/admin/dashboard/admin-dashboard";
+import { useAdminContext } from "./admin-context";
 
 export default function AdminPage() {
-  return <main className="mx-auto min-h-screen max-w-4xl px-6 py-16"><AdminSession /></main>;
+  const { membership, session } = useAdminContext();
+  return <><AdminPageHeader eyebrow="ศูนย์ควบคุมองค์กร" title="ภาพรวม" description="ติดตามความพร้อมของข้อมูลและงานสำคัญตลอดกระบวนการออกใบประกาศนียบัตร" />
+    <AdminDashboard csrfToken={session.csrf_token} key={membership.id} membership={membership} /></>;
 }

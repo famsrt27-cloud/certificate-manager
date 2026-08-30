@@ -44,6 +44,21 @@ export const listTemplates = async (database: Kysely<Database>, input: TemplateL
   return query.orderBy("created_at", "desc").orderBy("id", "desc").limit(input.limit + 1).execute();
 };
 
+export const listTemplatePreviewVersions = async (
+  database: Kysely<Database>, organizationId: string, templateIds: readonly string[]
+) => {
+  if (templateIds.length === 0) return [];
+  return database.selectFrom("template_versions")
+    .distinctOn("template_id")
+    .select(["id", "template_id", "version", "definition_json", "status"])
+    .where("organization_id", "=", organizationId)
+    .where("template_id", "in", templateIds)
+    .orderBy("template_id")
+    .orderBy(sql<number>`case status when 'PUBLISHED' then 0 when 'DRAFT' then 1 else 2 end`)
+    .orderBy("version", "desc")
+    .execute();
+};
+
 export const updateTemplateInTransaction = async (
   transaction: Transaction<Database>,
   organizationId: string,
@@ -335,6 +350,13 @@ export const findTemplateAsset = async (database: Kysely<Database>, organization
   database.selectFrom("template_assets").select([
     "id", "template_id", "original_filename", "content_sha256", "detected_mime_type", "size_bytes", "width_px", "height_px", "status"
   ]).where("organization_id", "=", organizationId).where("template_id", "=", templateId).where("id", "=", assetId).executeTakeFirst();
+
+export const findTemplateImageAssetContent = async (
+  database: Kysely<Database>, organizationId: string, templateId: string, assetId: string
+) => database.selectFrom("template_assets").select([
+  "id", "storage_key", "content_sha256", "detected_mime_type", "size_bytes", "status"
+]).where("organization_id", "=", organizationId).where("template_id", "=", templateId)
+  .where("id", "=", assetId).executeTakeFirst();
 
 export const findTemplateAssetsByIds = async (database: Kysely<Database>, organizationId: string, templateId: string,
   assetIds: readonly string[]) => assetIds.length === 0 ? [] : database.selectFrom("template_assets").select([

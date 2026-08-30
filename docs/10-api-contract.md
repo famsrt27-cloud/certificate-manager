@@ -51,6 +51,8 @@ Large admin collections use cursor pagination:
 }
 ```
 
+The template collection includes a bounded `preview` summary for each item so the library can render the canonical composition without per-template version requests. The selected preview is the highest version in `PUBLISHED`, otherwise the highest `DRAFT`, otherwise the highest remaining lifecycle state; templates without a version return `preview: null`. The summary contains only `version`, `status`, and the validated canonical `definition`. Private image bytes remain available only through the tenant-authorized asset-content endpoint.
+
 ## Foundation health endpoints
 
 Operational health endpoints are outside the `/api` business namespace and do not implement domain behavior:
@@ -146,6 +148,18 @@ Requires a valid session. Returns the current user, active memberships, effectiv
 Requires a valid session and `X-CSRF-Token`. The server deletes the Redis session and expires the cookie. Repeated logout receives a safe idempotent response without disclosing prior session state.
 
 ## Admin endpoints
+
+### Organization dashboard summary
+
+`GET /api/admin/dashboard`
+
+- Requires an authenticated active membership, `X-Organization-ID`, and `organization:read`.
+- Returns `Cache-Control: no-store` and a bounded aggregate summary for the selected organization.
+- Metric groups are omitted unless the server-resolved membership has the corresponding existing read permission: `project:read`, `training:read`, `participant:read`, `template:read`, `certificate:read`, or `job:read`.
+- Project and training `active` counts include only `ACTIVE` rows; `total` includes all lifecycle states.
+- Published template-version readiness counts only `PUBLISHED` versions belonging to active templates.
+- Certificate `in_progress` counts `DRAFT` and `GENERATING` certificates. Job attention counts expose only lifecycle totals, never job payloads or error details.
+- All aggregates are explicitly filtered by `organization_id`; no resource identifiers, recipient data, storage keys, token material, or session data are returned.
 
 The examples below show core contracts. CRUD list/read/update/archive endpoints follow the same envelope, organization-scope and permission rules and must be added to OpenAPI before implementation.
 
@@ -310,6 +324,34 @@ Only a job in `AWAITING_CONFIRMATION` may be confirmed. Confirmation resumes asy
 
 Confirmation is PostgreSQL-state-idempotent for the organization/job/operation. A repeated request with the required `Idempotency-Key` returns the current safe job status and cannot create duplicate participants or training relationships. A non-empty `external_reference` is matched exactly within the organization under a transaction lock; missing references create distinct participants and display names are never deduplication keys.
 
+### List admin certificates
+
+`GET /api/admin/certificates`
+
+Permission: `certificate:read`
+
+Cursor-paginated with `limit` 1-100 (default 50). Optional bounded filters are `training_id` and canonical certificate `status`. The query is explicitly organization-scoped and reads recipient, project, training and issue-time display fields from the immutable issuance snapshot. It returns the internal certificate ID only for authorized admin actions, certificate number, lifecycle status, snapshot display fields, training ID, issue/revocation timestamps and the private bounded revocation reason. It never returns a public identifier, participant external reference, verification token/key material, PDF storage key/URL/hash, or job payload.
+
+### View or download an admin certificate PDF
+
+`GET /api/admin/certificates/{certificateId}/pdf`
+
+Permission: `certificate:download`
+
+Requires an authenticated admin session and `X-Organization-ID`. The certificate lookup is explicitly scoped to the selected organization and only an `AVAILABLE` certificate with complete, valid PDF publication metadata may be returned. `certificate:read` does not grant PDF access.
+
+Optional query parameter `disposition` is `inline` by default and may be `attachment`. Both modes read the same private object through the application, enforce the configured PDF size bound, expected byte length, `%PDF-` signature and SHA-256 digest, then re-read persisted state and publication identity after storage access. A concurrent revocation or publication change fails closed.
+
+Response `200`:
+
+- `Content-Type: application/pdf`
+- `Content-Disposition: inline|attachment; filename="certificate-<sanitized-certificate-number>.pdf"`
+- `Cache-Control: private, no-store`
+- `X-Content-Type-Options: nosniff`
+- `X-Request-ID: <uuid>`
+
+No storage key, storage URL, public identifier or verification/download token is exposed.
+
 ### Generate certificates
 
 `POST /api/admin/trainings/{trainingId}/certificates/generate`
@@ -395,6 +437,7 @@ Permission: `certificate:revoke`
 ```
 
 Revocation is atomic, idempotent for the same effective state and audited. The reason is private admin data.
+Only an `AVAILABLE` certificate may transition to `REVOKED`; a repeated request for an already-revoked certificate returns its current immutable admin representation without changing its original reason or creating a second audit event. Other lifecycle states conflict. Tenant scope is applied to both the lock and update, and revocation does not delete the stored PDF. Public verification and download authorization consult current persisted state and therefore reflect revocation immediately.
 
 ## Public security policy
 
@@ -521,3 +564,15 @@ Malformed, invalid-signature, unknown-identifier, unavailable and invalid downlo
 ```
 
 Use a consistent status policy and avoid material timing differences. Rate limiting returns `429` with the same non-disclosing body and an appropriate `Retry-After` header.
+
+### Bounded public certificate search
+
+`POST /api/public/certificates/project-suggestions` accepts exactly `{ "query": "..." }`. `POST /api/public/certificates/training-suggestions` accepts `{ "query": "..." }` with optional `project_name`; when supplied, the selected exact project is an additional server-side filter. Query text requires at least two normalized characters. Both operations use separate distributed 30-request/60-second network rate-limit buckets, read only opted-in `AVAILABLE` issuance snapshots, return at most ten `{ "label": "..." }` items, and expose no IDs, people, certificate references, totals or pagination. The certificate discovery operation retains its stricter separate 5-request/60-second network bucket. Empty and too-short requests use the generic public error.
+
+`POST /api/public/certificates/search` is distinct from signed QR verification. Its strict body accepts exactly: `certificate_number` alone; `recipient_name` plus `project_name`; `recipient_name` plus `training_name`; or the recipient plus both contexts. Values are NFKC-normalized, trimmed and whitespace-collapsed. Recipient matching is exact after that normalization and after removing at most one recognized leading Thai title: `นาย`, `นาง`, `นางสาว`, `เด็กชาย`, `เด็กหญิง`, `ด.ช.` or `ด.ญ.`. The dotted abbreviations tolerate NFKC-equivalent dots and canonical whitespace around their dots; no other punctuation or leading word is removed. Recipient requires at least four characters; contexts and certificate number require at least three. Character and UTF-8 byte ceilings apply. Empty, name-only, internal-ID, external-reference and unknown-field input receives the generic public error. First-name, surname and other partial-name input is never sufficient.
+
+Matching is exact after explicit trim/case normalization, with no fuzzy or wildcard semantics. Only organization-opted-in `AVAILABLE` issuance snapshots are returned. The response has at most ten rows, no total and no cursor. An eleventh match yields `results: []` and `too_broad: true`. Each row contains only `certificate_number`, `recipient_name`, `project_name`, the separately approved search-only `training_name`, `issued_at`, literal `available` status and a non-display `search_result_token`. This does not broaden the QR verification contract.
+
+`POST /api/public/certificates/search-download-authorize` accepts only `{ "search_result_token": "..." }`. It verifies the distinct search-result type/audience/signature/expiry before lookup, re-reads current persisted state and complete publication metadata, and issues the existing typed download token only for current `AVAILABLE` PDFs. QR and download tokens are rejected. Final redemption remains `POST /api/public/certificates/download` with its own state and integrity recheck.
+
+`PATCH /api/admin/organizations/current` accepts exactly `{ "public_certificate_search_enabled": boolean }`, requires the selected `X-Organization-ID`, authenticated membership, CSRF validation and `organization:update`, and returns the resulting boolean. The setting remains `FALSE` by default and is never enabled by bootstrap or migration.

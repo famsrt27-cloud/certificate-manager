@@ -9,7 +9,12 @@ import {
 import { z } from "zod";
 
 export const CERTIFICATE_RENDER_INPUT_VERSION = 1 as const;
-export const CERTIFICATE_RENDERER_REVISION = "pdfkit-qrcode-v1" as const;
+export const LEGACY_CERTIFICATE_RENDERER_REVISION = "pdfkit-qrcode-v1" as const;
+export const CERTIFICATE_RENDERER_REVISION = "pdfkit-qrcode-v2" as const;
+export const SUPPORTED_CERTIFICATE_RENDERER_REVISIONS = [
+  LEGACY_CERTIFICATE_RENDERER_REVISION,
+  CERTIFICATE_RENDERER_REVISION
+] as const;
 export const MAX_VERIFICATION_URL_BYTES = 2_331;
 
 const mimeSchema = z.enum(["image/png", "image/jpeg", "font/ttf", "font/otf"]);
@@ -66,7 +71,7 @@ const bindingContextSchema = z.object({
 
 const certificateRenderInputSchema = z.object({
   inputVersion: z.literal(CERTIFICATE_RENDER_INPUT_VERSION),
-  rendererRevision: z.literal(CERTIFICATE_RENDERER_REVISION),
+  rendererRevision: z.enum(SUPPORTED_CERTIFICATE_RENDERER_REVISIONS),
   templateDefinition: TemplateDefinitionSchema,
   bindings: bindingContextSchema,
   assets: z.array(renderAssetSchema).max(200)
@@ -82,7 +87,7 @@ export interface CertificateRenderAsset {
 
 export interface CertificateRenderInput {
   readonly inputVersion: typeof CERTIFICATE_RENDER_INPUT_VERSION;
-  readonly rendererRevision: typeof CERTIFICATE_RENDERER_REVISION;
+  readonly rendererRevision: (typeof SUPPORTED_CERTIFICATE_RENDERER_REVISIONS)[number];
   readonly templateDefinition: TemplateDefinition;
   readonly bindings: TemplateBindingContext;
   readonly assets: readonly CertificateRenderAsset[];

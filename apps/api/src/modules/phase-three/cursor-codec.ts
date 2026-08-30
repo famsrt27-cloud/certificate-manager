@@ -8,7 +8,7 @@ const CursorPayloadSchema = z.object({
   version: z.literal(1),
   organization_id: z.uuid(),
   resource: z.enum(["projects", "trainings", "participants", "participant_import_rows", "templates",
-    "template_versions", "template_assets"]),
+    "template_versions", "template_assets", "certificates"]),
   created_at: z.iso.datetime({ offset: true }),
   id: z.uuid()
 }).strict();

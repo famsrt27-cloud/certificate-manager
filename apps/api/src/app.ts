@@ -11,11 +11,18 @@ import { registerAdminAuthRoutes, type AdminAuthRouteOptions } from "./routes/ad
 import { registerAdminPhaseThreeRoutes, type AdminPhaseThreeRouteOptions } from "./routes/admin-phase-three.js";
 import { registerAdminPhaseFourRoutes, type AdminPhaseFourRouteOptions } from "./routes/admin-phase-four.js";
 import { registerAdminPhaseFiveRoutes, type AdminPhaseFiveRouteOptions } from "./routes/admin-phase-five.js";
+import { registerAdminDashboardRoutes, type AdminDashboardRouteOptions } from "./routes/admin-dashboard.js";
+import { registerAdminOrganizationSettingsRoutes,
+  type AdminOrganizationSettingsRouteOptions } from "./routes/admin-organization-settings.js";
 import { registerPublicVerificationRoutes, type PublicVerificationRouteOptions } from "./routes/public-verification.js";
 import { registerPublicDownloadAuthorizationRoutes,
   type PublicDownloadAuthorizationRouteOptions } from "./routes/public-download-authorization.js";
 import { registerPublicCertificateDownloadRoutes,
   type PublicCertificateDownloadRouteOptions } from "./routes/public-certificate-download.js";
+import { registerPublicCertificateSearchRoutes,
+  type PublicCertificateSearchRouteOptions } from "./routes/public-certificate-search.js";
+import { registerPublicSearchDownloadAuthorizationRoutes,
+  type PublicSearchDownloadAuthorizationRouteOptions } from "./routes/public-search-download-authorization.js";
 
 export interface BuildApiOptions {
   readonly dependencies: ReadinessDependencies;
@@ -26,9 +33,13 @@ export interface BuildApiOptions {
   readonly phaseThree?: AdminPhaseThreeRouteOptions;
   readonly phaseFour?: AdminPhaseFourRouteOptions;
   readonly phaseFive?: AdminPhaseFiveRouteOptions;
+  readonly dashboard?: AdminDashboardRouteOptions;
+  readonly organizationSettings?: AdminOrganizationSettingsRouteOptions;
   readonly publicVerification?: PublicVerificationRouteOptions;
   readonly publicDownloadAuthorization?: PublicDownloadAuthorizationRouteOptions;
   readonly publicCertificateDownload?: PublicCertificateDownloadRouteOptions;
+  readonly publicCertificateSearch?: PublicCertificateSearchRouteOptions;
+  readonly publicSearchDownloadAuthorization?: PublicSearchDownloadAuthorizationRouteOptions;
 }
 
 export const API_JSON_BODY_LIMIT_BYTES = 1_048_576;
@@ -42,9 +53,13 @@ export const buildApi = ({
   phaseThree,
   phaseFour,
   phaseFive,
+  dashboard,
+  organizationSettings,
   publicVerification,
   publicDownloadAuthorization,
-  publicCertificateDownload
+  publicCertificateDownload,
+  publicCertificateSearch,
+  publicSearchDownloadAuthorization
 }: BuildApiOptions): FastifyInstance => {
   const app = Fastify({
     bodyLimit: API_JSON_BODY_LIMIT_BYTES,
@@ -81,12 +96,18 @@ export const buildApi = ({
   }
   if (phaseFour !== undefined) registerAdminPhaseFourRoutes(app, phaseFour);
   if (phaseFive !== undefined) registerAdminPhaseFiveRoutes(app, phaseFive);
+  if (dashboard !== undefined) registerAdminDashboardRoutes(app, dashboard);
+  if (organizationSettings !== undefined) registerAdminOrganizationSettingsRoutes(app, organizationSettings);
   if (publicVerification !== undefined) registerPublicVerificationRoutes(app, publicVerification);
   if (publicDownloadAuthorization !== undefined) {
     registerPublicDownloadAuthorizationRoutes(app, publicDownloadAuthorization);
   }
   if (publicCertificateDownload !== undefined) {
     registerPublicCertificateDownloadRoutes(app, publicCertificateDownload);
+  }
+  if (publicCertificateSearch !== undefined) registerPublicCertificateSearchRoutes(app, publicCertificateSearch);
+  if (publicSearchDownloadAuthorization !== undefined) {
+    registerPublicSearchDownloadAuthorizationRoutes(app, publicSearchDownloadAuthorization);
   }
   return app;
 };

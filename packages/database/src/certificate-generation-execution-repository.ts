@@ -50,7 +50,7 @@ export type BeginCertificateGenerationResult = "READY" | "COMPLETE" | "TERMINAL"
 
 export const beginCertificateGenerationJob = async (
   database: Kysely<Database>,
-  input: { readonly organizationId: string; readonly jobId: string; readonly supportedRendererRevision: string }
+  input: { readonly organizationId: string; readonly jobId: string; readonly supportedRendererRevisions: readonly string[] }
 ): Promise<BeginCertificateGenerationResult> => database.transaction().execute(async (transaction) => {
   const job = await transaction.selectFrom("jobs as job")
     .innerJoin("certificate_generation_jobs as detail", (join) => join
@@ -63,7 +63,7 @@ export const beginCertificateGenerationJob = async (
     .forUpdate()
     .executeTakeFirst();
   if (job === undefined) throw new CertificateGenerationExecutionError(CERTIFICATE_GENERATION_ERROR_CODES.invalidJob);
-  if (job.renderer_revision !== input.supportedRendererRevision) {
+  if (!input.supportedRendererRevisions.includes(job.renderer_revision)) {
     throw new CertificateGenerationExecutionError(CERTIFICATE_GENERATION_ERROR_CODES.unsupportedRenderer);
   }
   if (job.status === "SUCCEEDED") return "COMPLETE";

@@ -8,6 +8,7 @@ import { ApplicationError } from "../../src/errors/application-error.js";
 import { OrganizationAuthorizationService } from "../../src/modules/auth/organization-authorization-service.js";
 import type { AuthenticatedContext, AuthenticationService } from "../../src/modules/auth/authentication-service.js";
 import { PhaseFiveService } from "../../src/modules/phase-five/phase-five-service.js";
+import type { AdminCertificatePdfService } from "../../src/modules/phase-six/admin-certificate-pdf-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const enabled = databaseUrl !== undefined && new URL(databaseUrl).pathname.toLowerCase().includes("test");
@@ -77,7 +78,9 @@ describe.skipIf(!enabled)("Phase Five generation API integration", () => {
     } as unknown as AuthenticationService;
     const authorization = new OrganizationAuthorizationService(authentication, { write: (event) => insertAuditRecord(database, event) });
     app = buildApi({ dependencies: { checkDatabase: async () => undefined, checkRedis: async () => undefined }, readinessTimeoutMs: 1_000, logger: false,
-      phaseFive: { authentication, authorization, service: new PhaseFiveService({ database, verificationKeyKid: "key-2026-01", now: () => new Date("2026-08-25T06:00:00Z") }) } });
+      phaseFive: { authentication, authorization, service: new PhaseFiveService({ database, verificationKeyKid: "key-2026-01",
+        cursorSecret: "synthetic-phase-five-cursor-secret", now: () => new Date("2026-08-25T06:00:00Z") }),
+        certificatePdf: { read: async () => { throw new Error("Not used by generation integration fixture"); } } as unknown as AdminCertificatePdfService } });
     await app.ready();
   });
 
@@ -173,5 +176,50 @@ describe.skipIf(!enabled)("Phase Five generation API integration", () => {
       .select("certificate.participant_id").where("item.job_id", "=", planned.body.data.job_id).execute();
     expect(certificateParticipants.map((row) => row.participant_id).sort()).toEqual([first, second].sort());
     expect(certificateParticipants.some((row) => row.participant_id === later)).toBe(false);
+  });
+
+  it("lists immutable tenant-scoped admin fields and revokes AVAILABLE certificates atomically", async () => {
+    const prior = authenticated!;
+    authenticated = { ...prior, identity: { ...authorizedIdentity, memberships: [{ ...authorizedIdentity.memberships[0]!,
+      permissions: ["certificate:read", "certificate:revoke"] }] } };
+    const row = await database.selectFrom("certificates as certificate")
+      .innerJoin("certificate_generation_items as item", "item.certificate_id", "certificate.id")
+      .select(["certificate.id", "item.id as item_id"]).where("certificate.organization_id", "=", organizationId)
+      .where("certificate.status", "=", "DRAFT").executeTakeFirstOrThrow();
+    const issuedAt = new Date("2026-08-25T06:00:00.000Z");
+    await database.updateTable("certificates").set({ status: "GENERATING", updated_at: issuedAt }).where("id", "=", row.id).execute();
+    await database.updateTable("certificate_generation_items").set({ status: "SUCCEEDED", updated_at: issuedAt }).where("id", "=", row.item_id).execute();
+    await database.updateTable("certificates").set({ status: "AVAILABLE", issued_at: issuedAt,
+      pdf_storage_key: `certificates/${row.id}/1.pdf`, pdf_content_sha256: Buffer.alloc(32, 4),
+      pdf_size_bytes: "256", pdf_mime_type: "application/pdf", updated_at: issuedAt }).where("id", "=", row.id).execute();
+
+    const listed = await request(app.server).get(`/api/admin/certificates?training_id=${trainingId}&status=AVAILABLE&limit=1`)
+      .set("x-organization-id", organizationId);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data).toEqual([expect.objectContaining({ id: row.id, status: "AVAILABLE",
+      recipient_display_name: expect.any(String), project_name: "Phase Five Project", training_name: "Phase Five Training" })]);
+    expect(JSON.stringify(listed.body)).not.toMatch(/public_identifier|external_reference|storage|pdf_|sha|verification|kid|token/i);
+    expect((await request(app.server).get("/api/admin/certificates").set("x-organization-id", otherOrganizationId)).status).toBe(403);
+
+    const revokeRequest = () => request(app.server).post(`/api/admin/certificates/${row.id}/revoke`)
+      .set("x-organization-id", organizationId).set("origin", "https://admin.example.invalid")
+      .set("x-csrf-token", csrfToken).send({ reason: "ออกใบประกาศให้ผู้รับผิดราย" });
+    const revoked = await revokeRequest();
+    expect(revoked.status).toBe(200); expect(revoked.body.data).toEqual(expect.objectContaining({ id: row.id, status: "REVOKED",
+      revocation_reason: "ออกใบประกาศให้ผู้รับผิดราย", revoked_at: expect.any(String) }));
+    expect((await revokeRequest()).status).toBe(200);
+    expect(await database.selectFrom("audit_logs").select("id").where("action", "=", "CERTIFICATE_REVOKED")
+      .where("resource_id", "=", row.id).execute()).toHaveLength(1);
+    const foreignCertificateId = randomUUID();
+    await database.insertInto("certificates").values({ id: foreignCertificateId, organization_id: otherOrganizationId,
+      training_id: otherTrainingId, participant_id: otherParticipantId, template_version_id: otherVersionId,
+      certificate_number: `FOREIGN-${randomUUID()}`, verification_key_kid: "foreign-key" }).execute();
+    await database.insertInto("certificate_issuance_snapshots").values({ certificate_id: foreignCertificateId,
+      organization_id: otherOrganizationId, recipient_display_name: "Foreign Recipient", project_name: "Foreign Project",
+      training_name: "Foreign Training", training_code: "FOREIGN", issued_at: issuedAt }).execute();
+    expect((await request(app.server).post(`/api/admin/certificates/${foreignCertificateId}/revoke`)
+      .set("x-organization-id", organizationId).set("origin", "https://admin.example.invalid")
+      .set("x-csrf-token", csrfToken).send({ reason: "ห้ามข้ามองค์กร" })).status).toBe(404);
+    authenticated = prior;
   });
 });

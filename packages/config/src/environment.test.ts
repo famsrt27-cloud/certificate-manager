@@ -40,6 +40,13 @@ describe("environment validation", () => {
     expect(environment.PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX).toBe(10);
     expect(environment.PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
     expect(environment.PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX).toBe(10);
+    expect(environment.PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_NETWORK_MAX).toBe(5);
+    expect(environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX).toBe(30);
+    expect(environment.PUBLIC_SEARCH_RESULT_TOKEN_TTL_SECONDS).toBe(180);
+    expect(environment.PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS).toBe(60);
+    expect(environment.PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX).toBe(10);
     expect(environment.CERTIFICATE_PDF_MAX_BYTES).toBe(10 * 1_024 * 1_024);
     expect(environment.VERIFICATION_SIGNING_KEYS_JSON["test-key"]).toHaveLength(32);
   });

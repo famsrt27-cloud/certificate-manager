@@ -141,8 +141,13 @@ OpenAPI paths must match these `docs/10-api-contract.md` operations exactly:
 - `POST /api/admin/participant-imports/{jobId}/confirm`
 - `POST /api/admin/trainings/{trainingId}/certificates/generate`
 - `GET /api/admin/jobs/{jobId}`
+- `GET /api/admin/certificates`
+- `GET /api/admin/certificates/{certificateId}/pdf`
 - `POST /api/admin/certificates/{certificateId}/revoke`
 - `POST /api/public/verify`
+- `POST /api/public/certificates/project-suggestions`
+- `POST /api/public/certificates/training-suggestions`
+- `PATCH /api/admin/organizations/current` (`organization:update`)
 - `POST /api/public/certificates/download-authorize`
 - `POST /api/public/certificates/download`
 
@@ -194,3 +199,5 @@ It must not declare a storage URL, storage key, certificate UUID or certificate 
 ## Logging annotation
 
 Token-bearing request fields are sensitive. Generated documentation, tracing, analytics and request logging must not capture verification tokens, download tokens, passwords, session secrets or unnecessary PII.
+
+The implemented public path inventory also includes `POST /api/public/certificates/search` and `POST /api/public/certificates/search-download-authorize`. Search documents only the four approved input names and the dedicated minimal result model; the exchange accepts only `search_result_token`. Neither schema declares internal IDs, public identifiers, participant references, storage metadata or signing details.

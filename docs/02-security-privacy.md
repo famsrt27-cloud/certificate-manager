@@ -115,3 +115,11 @@ Prohibited by default:
 - renderer dependency-capability drift, extra secret/infrastructure input fields, asset hash mismatch and verification-token query-string transport
 - bcrypt 72-byte boundary, session fixation/rotation and CSRF replay
 - secret/PII log leakage
+
+## Bounded public certificate search
+
+Public certificate search is a separate, organization-opt-in disclosure path from possession-based QR verification. It never permits empty browsing or name-only lookup: callers provide either an exact certificate number, or an exact normalized recipient name plus an exact project and/or training name. Only `AVAILABLE` issuance snapshots participate; revoked and all non-public lifecycle states are absent. Responses are capped at ten with no totals or pagination, and an eleventh match produces no partial result page. Search uses a stricter distributed rate limit than QR verification.
+
+Project and training selectors use separate distributed-rate-limited public suggestion requests. Each request requires at least two NFKC/whitespace-normalized input characters and returns at most ten snapshot labels. Empty input never returns a catalog. Labels appear only when an opted-in organization has at least one `AVAILABLE` certificate in that context. Training suggestions work independently; when a project is supplied, its exact normalized name is an additional server-side filter. Responses contain labels only: no UUIDs, participants, certificate identifiers, external references or counts. Recipient names are never suggested.
+
+Each returned row contains only approved snapshot display fields and a non-visible, server-signed search-result capability valid for 180 seconds. This token has a distinct type/audience, remains only in component memory, and can be exchanged only after a fresh `AVAILABLE` publication check for the existing at-most-60-second PDF download token. Final redemption retains current-state, metadata, hash, size and private-storage checks.

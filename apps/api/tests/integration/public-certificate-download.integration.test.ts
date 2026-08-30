@@ -2,7 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { PublicVerificationRateLimiter } from "@certificate-platform/auth";
 import { closeDatabase, createDatabase, findPublicCertificateDownload,
-  findPublicCertificateDownloadAuthorization, findPublicCertificateVerification } from "@certificate-platform/database";
+  findPublicCertificateDownloadAuthorization, findPublicCertificateVerification,
+  findPublicCertificatesBySearch, suggestPublicCertificateProjects,
+  suggestPublicCertificateTrainings } from "@certificate-platform/database";
 import { createCertificateDownloadToken, createCertificateVerificationToken } from "@certificate-platform/domain";
 import { closeRedis, connectRedis, createRedisConnection } from "@certificate-platform/queue";
 import { createPrivateObjectStorage, createS3Client, ensurePrivateBucket } from "@certificate-platform/storage";
@@ -12,6 +14,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildApi } from "../../src/app.js";
 import { createAuthRedisStore } from "../../src/infrastructure/auth-redis-store.js";
 import { PublicCertificateDownloadService } from "../../src/modules/phase-six/public-certificate-download-service.js";
+import { PublicCertificateSearchService } from "../../src/modules/phase-six/public-certificate-search-service.js";
+import { PublicSearchDownloadAuthorizationService } from "../../src/modules/phase-six/public-search-download-authorization-service.js";
 import { PublicDownloadAuthorizationService } from "../../src/modules/phase-six/public-download-authorization-service.js";
 import { PublicVerificationService } from "../../src/modules/phase-six/public-verification-service.js";
 
@@ -47,6 +51,9 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
   const plannedIssuedAt = new Date("2026-08-26T08:00:00.000Z");
   const authorizationNow = new Date("2026-08-26T10:00:00.000Z");
   const organizationId = randomUUID();
+  const contextSuffix = randomUUID().slice(0, 8);
+  const snapshotProjectName = `Phase Six ${contextSuffix} Program`;
+  const snapshotTrainingName = `Phase Six ${contextSuffix} Training`;
   const userId = randomUUID();
   const membershipId = randomUUID();
   const projectId = randomUUID();
@@ -56,7 +63,8 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
   const objectKeys: string[] = [];
   let app: ReturnType<typeof buildApi>;
 
-  const createAvailableCertificate = async (label: string, expectedPdf: Uint8Array, storedPdf = expectedPdf) => {
+  const createAvailableCertificate = async (label: string, expectedPdf: Uint8Array, storedPdf = expectedPdf,
+    recipientDisplayName = `Snapshot ${label}`) => {
     const participantId = randomUUID();
     const certificateId = randomUUID();
     const jobId = randomUUID();
@@ -75,8 +83,8 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
       template_version_id: templateVersionId, certificate_number: `P6-${randomUUID()}`,
       verification_key_kid: "active-key" }).execute();
     await database.insertInto("certificate_issuance_snapshots").values({ certificate_id: certificateId,
-      organization_id: organizationId, recipient_display_name: `Snapshot ${label}`, project_name: "Phase Six Program",
-      training_name: "Phase Six Training", training_code: "P6", issued_at: plannedIssuedAt }).execute();
+      organization_id: organizationId, recipient_display_name: recipientDisplayName, project_name: snapshotProjectName,
+      training_name: snapshotTrainingName, training_code: "P6", issued_at: plannedIssuedAt }).execute();
     await database.updateTable("certificates").set({ status: "GENERATING", updated_at: new Date() })
       .where("id", "=", certificateId).execute();
     await database.insertInto("jobs").values({ id: jobId, organization_id: organizationId,
@@ -115,6 +123,20 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
       service: new PublicCertificateDownloadService({ verificationKeys, maximumPdfBytes: 10 * 1_024 * 1_024,
         now, storage, repository: { findByPublicIdentifier: (identifier) =>
           findPublicCertificateDownload(database, identifier) } }) }
+    , publicCertificateSearch: { rateLimiter: limiter("search"),
+      projectSuggestionRateLimiter: limiter("project-suggestion"),
+      trainingSuggestionRateLimiter: limiter("training-suggestion"),
+      service: new PublicCertificateSearchService({ activeSigningKeyId: "active-key", activeSigningKey: activeKey,
+        ttlSeconds: 180, now, repository: { search: (criteria, limit) =>
+          findPublicCertificatesBySearch(database, criteria, limit),
+        suggestProjects: (query, limit) => suggestPublicCertificateProjects(database, query, limit),
+        suggestTrainings: (projectName, query, limit) =>
+          suggestPublicCertificateTrainings(database, projectName, query, limit) } }) },
+    publicSearchDownloadAuthorization: { rateLimiter: limiter("search-authorize"),
+      service: new PublicSearchDownloadAuthorizationService({ verificationKeys, activeSigningKeyId: "active-key",
+        activeSigningKey: activeKey, downloadTtlSeconds: 60, now,
+        repository: { findByPublicIdentifier: (identifier) =>
+          findPublicCertificateDownloadAuthorization(database, identifier) } }) }
   });
 
   beforeAll(async () => {
@@ -123,6 +145,8 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
     await database.insertInto("users").values({ id: userId,
       email: `phase-six-download-${randomUUID()}@example.invalid`, password_hash: "synthetic" }).execute();
     await database.insertInto("organizations").values({ id: organizationId, name: "Phase Six Download Tenant" }).execute();
+    await database.updateTable("organizations").set({ public_certificate_search_enabled: true })
+      .where("id", "=", organizationId).execute();
     await database.insertInto("organization_memberships").values({ id: membershipId,
       organization_id: organizationId, user_id: userId }).execute();
     await database.insertInto("projects").values({ id: projectId, organization_id: organizationId,
@@ -171,6 +195,201 @@ describe.skipIf(!enabled)("public certificate secure download integration", () =
     expect(Object.keys(authorization.body).sort()).toEqual(["data", "meta"]);
     expect(Object.keys(authorization.body.data).sort()).toEqual(["download_token", "expires_in"]);
     expect(Object.keys(authorization.body.meta)).toEqual(["request_id"]);
+  });
+
+  it("proves Thai bounded search -> distinct result capability -> current-state authorization -> canonical PDF redemption", async () => {
+    const pdf = Buffer.from("%PDF-1.7\nsearch-discovered private certificate\n%%EOF", "ascii");
+    const certificate = await createAvailableCertificate("ค้นหาภาษาไทย", pdf);
+    await database.updateTable("organizations").set({ public_certificate_search_enabled: false })
+      .where("id", "=", organizationId).execute();
+    const optedOut = await request(app.server).post("/api/public/certificates/search").send({
+      recipient_name: "Snapshot ค้นหาภาษาไทย", project_name: snapshotProjectName
+    });
+    expect(optedOut.body.data.results).toEqual([]);
+    await database.updateTable("organizations").set({ public_certificate_search_enabled: true })
+      .where("id", "=", organizationId).execute();
+    const trainingOnly = await request(app.server).post("/api/public/certificates/search").send({
+      recipient_name: "Snapshot ค้นหาภาษาไทย", training_name: snapshotTrainingName
+    });
+    expect(trainingOnly.status).toBe(200);
+    expect(trainingOnly.body.data.results).toHaveLength(1);
+    const searched = await request(app.server).post("/api/public/certificates/search").send({
+      recipient_name: "Snapshot ค้นหาภาษาไทย", project_name: snapshotProjectName,
+      training_name: snapshotTrainingName
+    });
+    expect(searched.status).toBe(200);
+    expect(searched.body.data.too_broad).toBe(false);
+    expect(searched.body.data.results).toHaveLength(1);
+    expect(searched.body.data.results[0]).toMatchObject({ recipient_name: "Snapshot ค้นหาภาษาไทย",
+      project_name: snapshotProjectName, training_name: snapshotTrainingName, status: "available" });
+    expect(JSON.stringify(searched.body)).not.toMatch(/public_identifier|certificate_id|participant|storage|sha|kid|jti/i);
+    const searchToken = searched.body.data.results[0].search_result_token as string;
+    expect(searchToken).not.toContain(certificate.publicIdentifier);
+
+    const authorization = await request(app.server).post("/api/public/certificates/search-download-authorize")
+      .send({ search_result_token: searchToken });
+    expect(authorization.status).toBe(200);
+    const downloaded = await request(app.server).post("/api/public/certificates/download")
+      .send({ download_token: authorization.body.data.download_token });
+    expect(downloaded.status).toBe(200);
+    expect(downloaded.body).toEqual(pdf);
+  });
+
+  it("matches only complete canonical Thai recipient names across allowlisted leading titles", async () => {
+    const createNamedCertificate = async (recipientName: string) => {
+      const pdf = Buffer.from("%PDF-1.7\ncanonical recipient title\n%%EOF", "ascii");
+      return createAvailableCertificate(`title-${randomUUID()}`, pdf, pdf, recipientName);
+    };
+    await createNamedCertificate("เด็กชายณัฐกิตต์ ไพนิตย์");
+    await createNamedCertificate("เด็กหญิงปุณณดา ทดสอบ");
+    await createNamedCertificate("นางสาวกมลชนก ตัวอย่าง");
+    await createNamedCertificate("นายวิทยา แบบทดสอบ");
+    await createNamedCertificate("นางอรุณี สาธิต");
+
+    const search = async (recipientName: string, context: "project" | "training" = "project") =>
+      request(app.server).post("/api/public/certificates/search").send({
+        recipient_name: recipientName,
+        ...(context === "project" ? { project_name: snapshotProjectName } : { training_name: snapshotTrainingName })
+      });
+
+    const withoutTitleByProject = await search("ณัฐกิตต์ ไพนิตย์");
+    expect(withoutTitleByProject.status).toBe(200);
+    expect(withoutTitleByProject.body.data.results).toHaveLength(1);
+    expect(withoutTitleByProject.body.data.results[0].recipient_name).toBe("เด็กชายณัฐกิตต์ ไพนิตย์");
+
+    const fullStoredName = await search("เด็กชายณัฐกิตต์ ไพนิตย์");
+    expect(fullStoredName.body.data.results).toHaveLength(1);
+    const abbreviatedWithCanonicalUnicode = await search("ด．ช．\u3000ณัฐกิตต์   ไพนิตย์");
+    expect(abbreviatedWithCanonicalUnicode.body.data.results).toHaveLength(1);
+    const differentTitle = await search("นางณัฐกิตต์ ไพนิตย์");
+    expect(differentTitle.body.data).toEqual({ results: [], too_broad: false });
+    const withoutTitleByTraining = await search("ณัฐกิตต์ ไพนิตย์", "training");
+    expect(withoutTitleByTraining.body.data.results).toHaveLength(1);
+
+    for (const [storedTitle, query] of [
+      ["เด็กหญิง", "ด.ญ. ปุณณดา ทดสอบ"],
+      ["นางสาว", "กมลชนก ตัวอย่าง"],
+      ["นาย", "วิทยา แบบทดสอบ"],
+      ["นาง", "อรุณี สาธิต"]
+    ] as const) {
+      const response = await search(query);
+      expect(response.body.data.results).toHaveLength(1);
+      expect(response.body.data.results[0].recipient_name).toMatch(new RegExp(`^${storedTitle}`));
+    }
+
+    for (const partialName of ["ณัฐกิตต์", "ไพนิตย์"]) {
+      const response = await search(partialName);
+      expect(response.status).toBe(200);
+      expect(response.body.data).toEqual({ results: [], too_broad: false });
+    }
+    const tooShortPartial = await search("ณัฐ");
+    expect(tooShortPartial.status).toBe(400);
+    expect(tooShortPartial.body.error.code).toBe("PUBLIC_REQUEST_FAILED");
+
+    const missingContext = await request(app.server).post("/api/public/certificates/search")
+      .send({ recipient_name: "ณัฐกิตต์ ไพนิตย์" });
+    expect(missingContext.status).toBe(400);
+    expect(missingContext.body.error.code).toBe("PUBLIC_REQUEST_FAILED");
+  });
+
+  it("suggests only opted-in AVAILABLE snapshot contexts with Thai/Unicode prefix normalization", async () => {
+    await createAvailableCertificate("ตัวอย่างคำค้น", Buffer.from("%PDF-1.7\nsuggestion\n%%EOF", "ascii"));
+    const project = await request(app.server).post("/api/public/certificates/project-suggestions")
+      .send({ query: `  phase\u3000six ${contextSuffix} ` });
+    expect(project.status).toBe(200);
+    expect(project.body.data.suggestions).toEqual([{ label: snapshotProjectName }]);
+    expect(JSON.stringify(project.body)).not.toMatch(/organization_id|participant|recipient|public_identifier|external_reference|count|total/i);
+    const independentTraining = await request(app.server).post("/api/public/certificates/training-suggestions")
+      .send({ query: `phase\u3000six ${contextSuffix}` });
+    expect(independentTraining.status).toBe(200);
+    expect(independentTraining.body.data.suggestions).toEqual([{ label: snapshotTrainingName }]);
+    const training = await request(app.server).post("/api/public/certificates/training-suggestions")
+      .send({ query: `phase\u3000six ${contextSuffix}`, project_name: ` phase   six ${contextSuffix} program ` });
+    expect(training.status).toBe(200);
+    expect(training.body.data.suggestions).toEqual([{ label: snapshotTrainingName }]);
+    const wrongProject = await request(app.server).post("/api/public/certificates/training-suggestions")
+      .send({ query: `phase six ${contextSuffix}`, project_name: "Different project" });
+    expect(wrongProject.body.data.suggestions).toEqual([]);
+
+    await database.updateTable("organizations").set({ public_certificate_search_enabled: false })
+      .where("id", "=", organizationId).execute();
+    const [disabledProject, disabledTraining] = await Promise.all([
+      request(app.server).post("/api/public/certificates/project-suggestions")
+        .send({ query: `Phase Six ${contextSuffix}` }),
+      request(app.server).post("/api/public/certificates/training-suggestions")
+        .send({ query: `Phase Six ${contextSuffix}` })
+    ]);
+    expect(disabledProject.body.data.suggestions).toEqual([]);
+    expect(disabledTraining.body.data.suggestions).toEqual([]);
+    await database.updateTable("organizations").set({ public_certificate_search_enabled: true })
+      .where("id", "=", organizationId).execute();
+  });
+
+  it("does not suggest a context backed only by a non-AVAILABLE certificate", async () => {
+    const participantId = randomUUID();
+    const certificateId = randomUUID();
+    await database.insertInto("participants").values({ id: participantId, organization_id: organizationId,
+      display_name: "Never suggested participant" }).execute();
+    await database.insertInto("training_participants").values({ organization_id: organizationId,
+      training_id: trainingId, participant_id: participantId }).execute();
+    await database.insertInto("certificates").values({ id: certificateId, organization_id: organizationId,
+      training_id: trainingId, participant_id: participantId, template_version_id: templateVersionId,
+      certificate_number: `DRAFT-${randomUUID()}`, verification_key_kid: "active-key" }).execute();
+    await database.insertInto("certificate_issuance_snapshots").values({ certificate_id: certificateId,
+      organization_id: organizationId, recipient_display_name: "Private Draft Person",
+      project_name: "Draft Only Context", training_name: "Draft Only Training", training_code: "DRAFT",
+      issued_at: plannedIssuedAt }).execute();
+    const [projectResponse, trainingResponse] = await Promise.all([
+      request(app.server).post("/api/public/certificates/project-suggestions").send({ query: "Draft" }),
+      request(app.server).post("/api/public/certificates/training-suggestions").send({ query: "Draft" })
+    ]);
+    expect(projectResponse.status).toBe(200);
+    expect(trainingResponse.status).toBe(200);
+    expect(projectResponse.body.data.suggestions).toEqual([]);
+    expect(trainingResponse.body.data.suggestions).toEqual([]);
+    expect(JSON.stringify({ project: projectResponse.body, training: trainingResponse.body }))
+      .not.toContain("Private Draft Person");
+  });
+
+  it("denies search-result authorization when AVAILABLE changes to REVOKED after search", async () => {
+    const certificate = await createAvailableCertificate("Search Revoked Race",
+      Buffer.from("%PDF-1.7\nsearch revocation race\n%%EOF", "ascii"));
+    const searched = await request(app.server).post("/api/public/certificates/search")
+      .send({ certificate_number: (await database.selectFrom("certificates").select("certificate_number")
+        .where("id", "=", certificate.certificateId).executeTakeFirstOrThrow()).certificate_number });
+    expect(searched.status).toBe(200);
+    await database.updateTable("certificates").set({ status: "REVOKED", revoked_at: new Date(),
+      revocation_reason: "Private search race reason", updated_at: new Date() })
+      .where("id", "=", certificate.certificateId).execute();
+    const authorization = await request(app.server).post("/api/public/certificates/search-download-authorize")
+      .send({ search_result_token: searched.body.data.results[0].search_result_token });
+    expect(authorization.status).toBe(400);
+    expect(authorization.body.error.code).toBe("PUBLIC_REQUEST_FAILED");
+    const repeatedSearch = await request(app.server).post("/api/public/certificates/search")
+      .send({ certificate_number: searched.body.data.results[0].certificate_number });
+    expect(repeatedSearch.body.data.results).toEqual([]);
+  });
+
+  it("does not enumerate a non-public DRAFT lifecycle row", async () => {
+    const participantId = randomUUID();
+    const certificateId = randomUUID();
+    const certificateNumber = `DRAFT-${randomUUID()}`;
+    await database.insertInto("participants").values({ id: participantId, organization_id: organizationId,
+      display_name: "Draft Search Person", external_reference: "must-never-be-searchable" }).execute();
+    await database.insertInto("training_participants").values({ organization_id: organizationId,
+      training_id: trainingId, participant_id: participantId, source_import_job_id: null }).execute();
+    await database.insertInto("certificates").values({ id: certificateId,
+      public_identifier: randomUUID().replaceAll("-", ""), organization_id: organizationId,
+      training_id: trainingId, participant_id: participantId, template_version_id: templateVersionId,
+      certificate_number: certificateNumber, verification_key_kid: "active-key" }).execute();
+    await database.insertInto("certificate_issuance_snapshots").values({ certificate_id: certificateId,
+      organization_id: organizationId, recipient_display_name: "Draft Search Person",
+      project_name: snapshotProjectName, training_name: snapshotTrainingName, training_code: "P6",
+      issued_at: plannedIssuedAt }).execute();
+    const response = await request(app.server).post("/api/public/certificates/search")
+      .send({ certificate_number: certificateNumber });
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({ results: [], too_broad: false });
   });
 
   it("blocks an authorization token after the certificate is revoked", async () => {
