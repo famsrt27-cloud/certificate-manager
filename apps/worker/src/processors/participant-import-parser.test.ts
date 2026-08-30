@@ -87,7 +87,109 @@ const workbookBytes = async (rows: readonly unknown[][], configure?: (sheet: Exc
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 };
 
+const prefixedSpreadsheetWorkbookBytes = (displayNameCell =
+  "<x:c r=\"B2\" t=\"str\"><x:v>Prefix Compatible</x:v></x:c>"): Buffer => syntheticZip([
+  {
+    name: "[Content_Types].xml",
+    body: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+      <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+        <Default ContentType="application/vnd.openxmlformats-package.relationships+xml" Extension="rels"/>
+        <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+        <Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+        <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+        <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+        <Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>
+      </Types>`
+  },
+  {
+    name: "_rels/.rels",
+    body: `<?xml version="1.0" encoding="UTF-8"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        <Relationship TargetMode="Internal" Target="xl/workbook.xml" Id="rId1"
+          Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"/>
+      </Relationships>`
+  },
+  {
+    name: "xl/workbook.xml",
+    body: `<?xml version="1.0" encoding="UTF-8"?>
+      <x:workbook xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        <x:sheets><x:sheet r:id="rId1" sheetId="1" name="Participants"/></x:sheets>
+      </x:workbook>`
+  },
+  {
+    name: "xl/_rels/workbook.xml.rels",
+    body: `<?xml version="1.0" encoding="UTF-8"?>
+      <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        <Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+          Id="rId1" TargetMode="Internal" Target="worksheets/sheet1.xml"/>
+        <Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"
+          Id="rId2" TargetMode="Internal" Target="styles.xml"/>
+        <Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings"
+          Id="rId3" TargetMode="Internal" Target="sharedStrings.xml"/>
+      </Relationships>`
+  },
+  {
+    name: "xl/styles.xml",
+    body: `<?xml version="1.0" encoding="UTF-8"?>
+      <x:styleSheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <x:fonts count="1"><x:font><x:sz val="11"/><x:name val="Calibri"/></x:font></x:fonts>
+        <x:fills count="1"><x:fill><x:patternFill patternType="none"/></x:fill></x:fills>
+        <x:borders count="1"><x:border/></x:borders>
+        <x:cellStyleXfs count="1"><x:xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></x:cellStyleXfs>
+        <x:cellXfs count="1"><x:xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></x:cellXfs>
+      </x:styleSheet>`
+  },
+  {
+    name: "xl/sharedStrings.xml",
+    body: "<x:sst xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"0\" uniqueCount=\"0\"/>"
+  },
+  {
+    name: "xl/worksheets/sheet1.xml",
+    body: `<?xml version="1.0" encoding="UTF-8"?>
+      <x:worksheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        <x:dimension ref="A1:B2"/>
+        <x:sheetData>
+          <x:row r="1"><x:c r="A1" t="str"><x:v>external_reference</x:v></x:c><x:c r="B1" t="str"><x:v>display_name</x:v></x:c></x:row>
+          <x:row r="2"><x:c r="A2" t="str"><x:v>ALT-1</x:v></x:c>${displayNameCell}</x:row>
+        </x:sheetData>
+        <x:tableParts count="1"><x:tablePart r:id="rId2"/></x:tableParts>
+      </x:worksheet>`
+  },
+  {
+    name: "xl/worksheets/_rels/sheet1.xml.rels",
+    body: `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table"
+        Target="/xl/tables/table1.xml" TargetMode="Internal"/>
+    </Relationships>`
+  },
+  {
+    name: "xl/tables/table1.xml",
+    body: `<x:table xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Participants"
+      displayName="Participants" ref="A1:B2" headerRowCount="1">
+      <x:tableColumns count="2"><x:tableColumn id="1" name="external_reference"/><x:tableColumn id="2" name="display_name"/></x:tableColumns>
+    </x:table>`
+  }
+]);
+
 describe("participant import parser", () => {
+  it("accepts the original prefixed SpreadsheetML structure with explicit internal relationships", async () => {
+    const bytes = prefixedSpreadsheetWorkbookBytes();
+    const excelJsControl = new ExcelJS.Workbook();
+    await expect(excelJsControl.xlsx.load(bytes as unknown as Parameters<typeof excelJsControl.xlsx.load>[0]))
+      .rejects.toThrow("Cannot read properties of undefined (reading 'sheets')");
+
+    await expect(parseParticipantImport(bytes, xlsxMime, limits)).resolves.toMatchObject([
+      { displayName: "Prefix Compatible", externalReference: "ALT-1", status: "VALID" }
+    ]);
+
+    const formulaRows = await parseParticipantImport(prefixedSpreadsheetWorkbookBytes(
+      "<x:c r=\"B2\"><x:f>1+1</x:f><x:v>2</x:v></x:c>"
+    ), xlsxMime, limits);
+    expect(formulaRows[0]?.validationErrors).toContainEqual({ code: "UNSUPPORTED_CELL_VALUE", field: "row" });
+  });
+
   it("parses approved CSV literals, line endings, and spreadsheet-looking text without formula interpretation", async () => {
     const rows = await parseParticipantImport(Buffer.from(
       "display_name,external_reference\r\n\"Line 1\rLine 2\",=literal\r\n\"Line A\nLine B\",+literal\r\n-safe,@literal\r\n"
@@ -150,14 +252,17 @@ describe("participant import parser", () => {
 
   it.each([
     [{ name: "xl/externalLinks/externalLink1.xml" }, "external link part"],
+    [{ name: "xl/activeX/activeX1.xml" }, "ActiveX control part"],
     [{ name: "xl/embeddings/object.bin" }, "embedded part"],
     [{ name: "xl/oleObjects/oleObject1.bin" }, "OLE part"],
     [{ name: "xl/vbaProject.bin" }, "macro part"],
-    [{ name: "xl/_rels/workbook.xml.rels", body: "<Relationships><Relationship TargetMode=\"External\" Target=\"http://127.0.0.1/\"/></Relationships>" }, "external relationship"],
+    [{ name: "xl/_rels/workbook.xml.rels", body: "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" TargetMode=\"External\" Target=\"http://127.0.0.1/\"/></Relationships>" }, "external relationship"],
     [{ name: "xl/_rels/utf16.xml.rels", body: Buffer.concat([Buffer.from([0xff, 0xfe]),
-      Buffer.from("<Relationship TargetMode=\"&#x45;xternal\" Target=\"http://localhost/\"/>", "utf16le")]) }, "encoded UTF-16 external relationship"],
-    [{ name: "xl/worksheets/_rels/sheet1.xml.rels", body: "<Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"file:///secret\" TargetMode=\"External\"/>" }, "external hyperlink"],
-    [{ name: "[Content_Types].xml", body: "<Types><Override ContentType=\"application/vnd.ms-office.vbaProject\"/></Types>" }, "macro content type"]
+      Buffer.from("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" TargetMode=\"&#x45;xternal\" Target=\"http://localhost/\"/></Relationships>", "utf16le")]) }, "encoded UTF-16 external relationship"],
+    [{ name: "xl/worksheets/_rels/sheet1.xml.rels", body: "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"file:///secret\" TargetMode=\"External\"/></Relationships>" }, "external hyperlink"],
+    [{ name: "xl/_rels/controls.xml.rels", body: "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/control\" Target=\"activeX/activeX1.xml\" TargetMode=\"Internal\"/></Relationships>" }, "ActiveX control relationship"],
+    [{ name: "[Content_Types].xml", body: "<!DOCTYPE Types SYSTEM \"https://example.invalid/ooxml.dtd\"><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>" }, "external DTD"],
+    [{ name: "[Content_Types].xml", body: "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/xl/vbaProject.bin\" ContentType=\"application/vnd.ms-office.vbaProject\"/></Types>" }, "macro content type"]
   ] as const)("rejects hostile OOXML content", async (entry, label) => {
     expect(label).toBeTypeOf("string");
     const entries = entry.name === "[Content_Types].xml"

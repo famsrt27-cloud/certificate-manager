@@ -61,3 +61,5 @@ Alert on:
 Use request_id and, where supported, distributed tracing.
 
 Tracing baggage and span attributes must follow the same secret/PII redaction rules as logs.
+
+Public `search_result_token` values receive the same request-body, structured-log, trace and error-report redaction as verification and download tokens. Search criteria and returned recipient names are not added to metrics, tracing attributes or routine request logs.

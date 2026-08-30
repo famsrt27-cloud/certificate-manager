@@ -296,3 +296,11 @@ Consequences:
 - Same-process package separation is not called a sandbox; production resource/process isolation remains a separate hardening requirement.
 - Security tests fail if forbidden infrastructure dependencies are introduced into renderer source/package metadata.
 - Phase 6 token code must keep verification-token time/key selection stable for existing certificates; renderer regeneration consumes the resulting prepared URL only.
+
+## Public certificate discovery and download capability separation
+
+Public discovery is an organization-opt-in boundary with default off. Included certificates may be found only while `AVAILABLE`, by exact certificate number or exact canonical immutable recipient snapshot plus project/training context. Recipient canonicalization uses NFKC, collapsed whitespace and removal of at most one allowlisted leading Thai title; arbitrary partial and fuzzy people matching remain prohibited. Inputs, distributed rate, returned rows and fields are bounded; there are no totals or pagination. `training_name` is approved only for this dedicated search response and does not alter QR verification disclosure.
+
+Each result carries a distinct 180-second search-result capability. Its exchange rechecks current publication state and issues the existing download capability, so private object storage and final redemption controls remain unchanged. The base schema/policy extension is recorded in migration `202608300009_public-certificate-search`; the indexed canonical title handling is recorded in migration `202608310010_canonical-recipient-name-search`. Administration is limited to one organization-level toggle on the existing dashboard rather than a new settings subsystem.
+
+Public project/training discovery is label-only and prefix-gated against the same opted-in `AVAILABLE` snapshot boundary. No stable public context identifier is needed because the selected canonical label is submitted to the existing exact normalized search contract. The current policy remains organization-wide. A possible future enhancement is per-training public-search visibility, but it requires a separately reviewed domain/schema/API change and is not implemented here.

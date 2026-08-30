@@ -5,7 +5,11 @@ import {
   closeDatabase,
   createDatabase,
   findPublicCertificateDownload,
+  findAdminCertificatePdf,
   findPublicCertificateDownloadAuthorization,
+  findPublicCertificatesBySearch,
+  suggestPublicCertificateProjects,
+  suggestPublicCertificateTrainings,
   findAuthenticationUser,
   findPublicCertificateVerification,
   insertAuditRecord,
@@ -26,9 +30,14 @@ import { OrganizationAuthorizationService } from "./modules/auth/organization-au
 import { PhaseThreeService } from "./modules/phase-three/phase-three-service.js";
 import { PhaseFourService } from "./modules/phase-four/phase-four-service.js";
 import { PhaseFiveService } from "./modules/phase-five/phase-five-service.js";
+import { DashboardService } from "./modules/dashboard/dashboard-service.js";
+import { OrganizationSettingsService } from "./modules/dashboard/organization-settings-service.js";
 import { PublicVerificationService } from "./modules/phase-six/public-verification-service.js";
 import { PublicDownloadAuthorizationService } from "./modules/phase-six/public-download-authorization-service.js";
 import { PublicCertificateDownloadService } from "./modules/phase-six/public-certificate-download-service.js";
+import { AdminCertificatePdfService } from "./modules/phase-six/admin-certificate-pdf-service.js";
+import { PublicCertificateSearchService } from "./modules/phase-six/public-certificate-search-service.js";
+import { PublicSearchDownloadAuthorizationService } from "./modules/phase-six/public-search-download-authorization-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -98,7 +107,10 @@ const phaseThreeService = new PhaseThreeService({
   cursorSecret: environment.SESSION_SECRET
 });
 const phaseFourService = new PhaseFourService({ database, storage, cursorSecret: environment.SESSION_SECRET });
-const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID });
+const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID,
+  cursorSecret: environment.SESSION_SECRET });
+const dashboardService = new DashboardService(database);
+const organizationSettingsService = new OrganizationSettingsService(database);
 const publicVerificationService = new PublicVerificationService({
   verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
   repository: { findByPublicIdentifier: (publicIdentifier) => findPublicCertificateVerification(database, publicIdentifier) }
@@ -131,11 +143,60 @@ const publicCertificateDownloadService = new PublicCertificateDownloadService({
   storage,
   maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
 });
+const adminCertificatePdfService = new AdminCertificatePdfService({
+  repository: { findByOrganizationAndId: (organizationId, certificateId) =>
+    findAdminCertificatePdf(database, organizationId, certificateId) },
+  storage,
+  maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
+});
 const publicCertificateDownloadRateLimiter = new PublicVerificationRateLimiter(authRedis, {
   secret: environment.SESSION_SECRET,
   windowSeconds: environment.PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS,
   networkMaximum: environment.PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX,
   keyPrefix: "public:download-rate:v1:"
+});
+const publicCertificateSearchService = new PublicCertificateSearchService({
+  repository: {
+    search: (criteria, limit) => findPublicCertificatesBySearch(database, criteria, limit),
+    suggestProjects: (query, limit) => suggestPublicCertificateProjects(database, query, limit),
+    suggestTrainings: (projectName, query, limit) =>
+      suggestPublicCertificateTrainings(database, projectName, query, limit)
+  },
+  activeSigningKeyId: environment.VERIFICATION_ACTIVE_KID,
+  activeSigningKey: activeVerificationSigningKey,
+  ttlSeconds: environment.PUBLIC_SEARCH_RESULT_TOKEN_TTL_SECONDS
+});
+const publicCertificateSearchRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:certificate-search-rate:v1:"
+});
+const publicProjectSuggestionRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:project-suggestion-rate:v1:"
+});
+const publicTrainingSuggestionRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:training-suggestion-rate:v1:"
+});
+const publicSearchDownloadAuthorizationService = new PublicSearchDownloadAuthorizationService({
+  verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
+  activeSigningKeyId: environment.VERIFICATION_ACTIVE_KID,
+  activeSigningKey: activeVerificationSigningKey,
+  downloadTtlSeconds: environment.PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS,
+  repository: { findByPublicIdentifier: (identifier) =>
+    findPublicCertificateDownloadAuthorization(database, identifier) }
+});
+const publicSearchDownloadAuthorizationRateLimiter = new PublicVerificationRateLimiter(authRedis, {
+  secret: environment.SESSION_SECRET,
+  windowSeconds: environment.PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS,
+  networkMaximum: environment.PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX,
+  keyPrefix: "public:search-download-authorize-rate:v1:"
 });
 
 const app = buildApi({
@@ -161,12 +222,22 @@ const app = buildApi({
     service: phaseFourService,
     templateAssetMaxBytes: environment.TEMPLATE_ASSET_MAX_BYTES
   },
-  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService },
+  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService,
+    certificatePdf: adminCertificatePdfService },
+  dashboard: { authentication: authenticationService, authorization, service: dashboardService },
+  organizationSettings: { authentication: authenticationService, authorization,
+    service: organizationSettingsService },
   publicVerification: { service: publicVerificationService, rateLimiter: publicVerificationRateLimiter },
   publicDownloadAuthorization: { service: publicDownloadAuthorizationService,
     rateLimiter: publicDownloadAuthorizationRateLimiter },
   publicCertificateDownload: { service: publicCertificateDownloadService,
-    rateLimiter: publicCertificateDownloadRateLimiter }
+    rateLimiter: publicCertificateDownloadRateLimiter },
+  publicCertificateSearch: { service: publicCertificateSearchService,
+    rateLimiter: publicCertificateSearchRateLimiter,
+    projectSuggestionRateLimiter: publicProjectSuggestionRateLimiter,
+    trainingSuggestionRateLimiter: publicTrainingSuggestionRateLimiter },
+  publicSearchDownloadAuthorization: { service: publicSearchDownloadAuthorizationService,
+    rateLimiter: publicSearchDownloadAuthorizationRateLimiter }
 });
 
 let stopping = false;

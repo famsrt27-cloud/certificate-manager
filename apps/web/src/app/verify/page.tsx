@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import { PublicVerificationClient } from "./public-verification-client";
 
 export const metadata: Metadata = {
-  title: "Verify certificate",
-  description: "Public certificate verification",
+  title: "ตรวจสอบใบประกาศ",
+  description: "ตรวจสอบสถานะและดาวน์โหลดใบประกาศสาธารณะอย่างปลอดภัย",
   referrer: "no-referrer",
   robots: { index: false, follow: false, nocache: true }
 };

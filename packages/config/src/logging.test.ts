@@ -11,6 +11,8 @@ describe("structured logging privacy", () => {
     expect(options.redact.paths).toContain("req.body.download_token");
     expect(options.redact.paths).toContain("download_token");
     expect(options.redact.paths).toContain("downloadToken");
+    expect(options.redact.paths).toContain("req.body.search_result_token");
+    expect(options.redact.paths).toContain("search_result_token");
     expect(options.redact.paths).toContain("verificationToken");
     expect(options.redact.paths).toContain("jti");
     expect(options.redact.paths).toContain("rawJti");

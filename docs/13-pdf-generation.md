@@ -58,6 +58,12 @@ The boundary rechecks asset requirements and SHA-256, rejects extra/missing asse
 
 The renderer never creates a verification token. It renders only the final `verificationUrl` prepared by trusted application code.
 
+## Page coordinate compatibility
+
+Renderer revision `pdfkit-qrcode-v2` converts the template's logical 96-pixel-per-inch coordinate model into PDFKit's 72-point-per-inch physical page model. Consequently, an A4 landscape definition is approximately 1122.52 x 793.70 logical units but produces a 841.89 x 595.28 point PDF MediaBox. Imported raster dimensions such as 3508 x 2480 pixels describe image resolution only; the image is mapped into the selected physical page using the canonical contain, cover, or fill behavior.
+
+Historical jobs retain `pdfkit-qrcode-v1`, which preserves the previous direct logical-unit-to-PDF-point behavior. The worker accepts both revisions, while newly planned jobs select v2. This preserves deterministic replay of existing jobs without rewriting stored template definitions.
+
 ## Worker rules
 
 - idempotent jobs

@@ -8,8 +8,15 @@ import {
   TemplateAssetListResponseSchema, TemplateAssetResponseSchema, TemplateListResponseSchema, TemplatePreviewResponseSchema,
   TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
   UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema,
-  PublicCertificateDownloadRequestSchema, PublicDownloadAuthorizationRequestSchema, PublicDownloadAuthorizationResponseSchema,
-  PublicVerificationRequestSchema, PublicVerificationResponseSchema
+  DashboardSummaryResponseSchema, PublicCertificateDownloadRequestSchema, PublicDownloadAuthorizationRequestSchema,
+  PublicDownloadAuthorizationResponseSchema, PublicVerificationRequestSchema, PublicVerificationResponseSchema,
+  PublicCertificateSearchRequestSchema, PublicCertificateSearchResponseSchema,
+  PublicCertificateSuggestionResponseSchema, PublicProjectSuggestionRequestSchema,
+  PublicTrainingSuggestionRequestSchema, OrganizationPublicSearchResponseSchema,
+  UpdateOrganizationPublicSearchRequestSchema,
+  PublicSearchDownloadAuthorizationRequestSchema, PublicSearchDownloadAuthorizationResponseSchema,
+  AdminCertificateResponseSchema, CertificateGenerationQueuedResponseSchema, CertificateListResponseSchema,
+  GenerateCertificatesRequestSchema, RevokeCertificateRequestSchema
 } from "@certificate-platform/contracts";
 import { z } from "zod";
 
@@ -58,6 +65,7 @@ export const openApiDocument = {
       responses: { ...response(200, AuthenticationResponseSchema), ...response(401, ErrorResponseSchema) } } },
     "/api/admin/auth/logout": { post: { security: stateSecurity,
       responses: { ...response(200, LogoutResponseSchema), ...response(403, ErrorResponseSchema) } } },
+    "/api/admin/dashboard": { get: readOperation("organization:read", DashboardSummaryResponseSchema) },
     "/api/admin/projects": {
       get: readOperation("project:read", ProjectListResponseSchema),
       post: writeOperation("project:create", ProjectResponseSchema, [], CreateProjectRequestSchema, 201)
@@ -140,8 +148,56 @@ export const openApiDocument = {
     "/api/admin/templates/{templateId}/assets/{assetId}": {
       get: readOperation("template:read", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
     },
+    "/api/admin/templates/{templateId}/assets/{assetId}/content": {
+      get: {
+        security: adminSecurity,
+        "x-required-permission": "template:read",
+        parameters: [organizationParameter, pathId("templateId"), pathId("assetId")],
+        responses: {
+          "200": { description: "Authenticated active template image", headers: {
+            "Cache-Control": { schema: { type: "string" } },
+            "X-Content-Type-Options": { schema: { type: "string" } }
+          }, content: {
+            "image/png": { schema: { type: "string", format: "binary" } },
+            "image/jpeg": { schema: { type: "string", format: "binary" } }
+          } },
+          ...errors
+        }
+      }
+    },
     "/api/admin/templates/{templateId}/assets/{assetId}/archive": {
       post: writeOperation("template:asset:create", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
+    },
+    "/api/admin/certificates": {
+      get: readOperation("certificate:read", CertificateListResponseSchema, [cursorParameter, limitParameter,
+        { name: "training_id", in: "query", required: false, schema: { type: "string", format: "uuid" } },
+        { name: "status", in: "query", required: false, schema: { type: "string",
+          enum: ["DRAFT", "GENERATING", "ISSUED", "AVAILABLE", "REVOKED", "ARCHIVED"] } }])
+    },
+    "/api/admin/certificates/{certificateId}/pdf": {
+      get: {
+        security: adminSecurity,
+        "x-required-permission": "certificate:download",
+        parameters: [organizationParameter, pathId("certificateId"), { name: "disposition", in: "query", required: false,
+          schema: { type: "string", enum: ["inline", "attachment"], default: "inline" } }],
+        responses: {
+          "200": { description: "Authenticated tenant-scoped certificate PDF", headers: {
+            "Content-Disposition": { schema: { type: "string" } },
+            "Cache-Control": { schema: { type: "string" } },
+            "X-Content-Type-Options": { schema: { type: "string" } },
+            "X-Request-ID": { schema: { type: "string", format: "uuid" } }
+          }, content: { "application/pdf": { schema: { type: "string", format: "binary" } } } },
+          ...errors
+        }
+      }
+    },
+    "/api/admin/trainings/{trainingId}/certificates/generate": {
+      post: writeOperation("certificate:generate", CertificateGenerationQueuedResponseSchema,
+        [pathId("trainingId"), idempotencyParameter], GenerateCertificatesRequestSchema, 202)
+    },
+    "/api/admin/certificates/{certificateId}/revoke": {
+      post: writeOperation("certificate:revoke", AdminCertificateResponseSchema,
+        [pathId("certificateId")], RevokeCertificateRequestSchema)
     },
     "/api/public/verify": { post: { security: [], requestBody: jsonRequest(PublicVerificationRequestSchema),
       responses: { ...response(200, PublicVerificationResponseSchema), ...response(400, ErrorResponseSchema),
@@ -149,6 +205,26 @@ export const openApiDocument = {
     "/api/public/certificates/download-authorize": { post: { security: [],
       requestBody: jsonRequest(PublicDownloadAuthorizationRequestSchema),
       responses: { ...response(200, PublicDownloadAuthorizationResponseSchema), ...response(400, ErrorResponseSchema),
+        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } },
+    "/api/admin/organizations/current": {
+      patch: writeOperation("organization:update", OrganizationPublicSearchResponseSchema, [],
+        UpdateOrganizationPublicSearchRequestSchema)
+    },
+    "/api/public/certificates/project-suggestions": { post: { security: [],
+      requestBody: jsonRequest(PublicProjectSuggestionRequestSchema),
+      responses: { ...response(200, PublicCertificateSuggestionResponseSchema), ...response(400, ErrorResponseSchema),
+        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } },
+    "/api/public/certificates/training-suggestions": { post: { security: [],
+      requestBody: jsonRequest(PublicTrainingSuggestionRequestSchema),
+      responses: { ...response(200, PublicCertificateSuggestionResponseSchema), ...response(400, ErrorResponseSchema),
+        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } },
+    "/api/public/certificates/search": { post: { security: [],
+      requestBody: jsonRequest(PublicCertificateSearchRequestSchema),
+      responses: { ...response(200, PublicCertificateSearchResponseSchema), ...response(400, ErrorResponseSchema),
+        ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } },
+    "/api/public/certificates/search-download-authorize": { post: { security: [],
+      requestBody: jsonRequest(PublicSearchDownloadAuthorizationRequestSchema),
+      responses: { ...response(200, PublicSearchDownloadAuthorizationResponseSchema), ...response(400, ErrorResponseSchema),
         ...response(429, ErrorResponseSchema), ...response(500, ErrorResponseSchema) } } },
     "/api/public/certificates/download": { post: { security: [],
       requestBody: jsonRequest(PublicCertificateDownloadRequestSchema),

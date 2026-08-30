@@ -21,6 +21,7 @@
     "test:e2e:list": "playwright test --list",
     "db:migrate": "pnpm --filter @certificate-platform/database migrate",
     "db:migrate:status": "pnpm --filter @certificate-platform/database migrate:status",
+    "dev:bootstrap-admin": "pnpm --filter @certificate-platform/auth build && pnpm --filter @certificate-platform/contracts build && pnpm --filter @certificate-platform/database build && node --env-file-if-exists=.env --import tsx apps/api/src/cli/dev-bootstrap-admin.ts",
     "test:compose": "vitest run tests/compose",
     "compose:config": "pnpm test:compose && docker compose config",
     "compose:build": "docker compose build api worker web migrate"

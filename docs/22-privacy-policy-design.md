@@ -55,3 +55,5 @@ If required by the organization/policy, support:
 Because certificates may have archival/verification obligations, deletion policies must distinguish between operational participant data and certificate integrity records.
 
 The opaque public certificate identifier is not an authentication secret, but it is not returned as a standalone public field. Public clients submit the complete signed token and receive only the minimal verification result.
+
+Public certificate search is a separate, explicit disclosure purpose and is disabled per organization by default. When enabled, it permits only exact certificate-number lookup or exact canonical recipient plus project/training context. Canonical recipient comparison normalizes Unicode and whitespace and ignores at most one allowlisted leading Thai title; it does not permit arbitrary substring, token or fuzzy people search. Search returns current `AVAILABLE` issuance-snapshot fields only and is bounded by strict validation, rate limits and a ten-result/no-pagination policy. `training_name` is approved only for this search response. Revoked history and live participant contact/reference data are never searchable.

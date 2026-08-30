@@ -25,6 +25,7 @@ interface TimestampedTable {
 export interface OrganizationsTable extends TimestampedTable {
   name: string;
   status: Generated<RecordStatus>;
+  public_certificate_search_enabled: Generated<boolean>;
 }
 
 export interface UsersTable extends TimestampedTable {

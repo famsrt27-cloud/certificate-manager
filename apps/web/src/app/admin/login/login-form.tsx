@@ -4,7 +4,12 @@ import { AuthenticationResponseSchema, LoginRequestSchema } from "@certificate-p
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
+import { Alert } from "../../../components/ui/alert";
+import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
+
 const apiBasePath = process.env.NEXT_PUBLIC_API_BASE_PATH ?? "/api";
+const genericLoginError = "ไม่สามารถเข้าสู่ระบบได้ กรุณาตรวจสอบข้อมูลและลองอีกครั้ง";
 
 export function LoginForm() {
   const router = useRouter();
@@ -17,7 +22,7 @@ export function LoginForm() {
     const form = new FormData(event.currentTarget);
     const input = LoginRequestSchema.safeParse({ email: form.get("email"), password: form.get("password") });
     if (!input.success) {
-      setError("ไม่สามารถเข้าสู่ระบบได้");
+      setError(genericLoginError);
       return;
     }
 
@@ -31,31 +36,31 @@ export function LoginForm() {
       });
       const body: unknown = await response.json();
       if (!response.ok || !AuthenticationResponseSchema.safeParse(body).success) {
-        setError("ไม่สามารถเข้าสู่ระบบได้");
+        setError(genericLoginError);
         return;
       }
       router.push("/admin");
     } catch {
-      setError("ไม่สามารถเข้าสู่ระบบได้");
+      setError(genericLoginError);
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <form className="mt-8 space-y-5" method="post" onSubmit={submit}>
+    <form className="mt-8 space-y-5" method="post" onSubmit={submit} aria-describedby={error === null ? undefined : "login-error"}>
       <div>
-        <label className="block text-sm font-medium text-slate-800" htmlFor="email">อีเมลผู้ดูแลระบบ</label>
-        <input autoComplete="username" className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300" id="email" name="email" required type="email" />
+        <label className="block text-sm font-semibold text-slate-700" htmlFor="email">อีเมลผู้ดูแลระบบ</label>
+        <Input autoComplete="username" className="mt-2" disabled={submitting} id="email" invalid={error !== null} name="email" placeholder="name@organization.com" required type="email" />
       </div>
       <div>
-        <label className="block text-sm font-medium text-slate-800" htmlFor="password">รหัสผ่าน</label>
-        <input autoComplete="current-password" className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 focus:border-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300" id="password" name="password" required type="password" />
+        <label className="block text-sm font-semibold text-slate-700" htmlFor="password">รหัสผ่าน</label>
+        <Input autoComplete="current-password" className="mt-2" disabled={submitting} id="password" invalid={error !== null} name="password" placeholder="กรอกรหัสผ่าน" required type="password" />
       </div>
-      {error === null ? null : <p aria-live="polite" className="text-sm text-red-700" role="alert">{error}</p>}
-      <button className="w-full rounded-lg bg-slate-950 px-4 py-2.5 font-medium text-white disabled:cursor-not-allowed disabled:opacity-60" disabled={submitting} type="submit">
-        {submitting ? "กำลังเข้าสู่ระบบ…" : "เข้าสู่ระบบ"}
-      </button>
+      {error === null ? null : <div id="login-error"><Alert>{error}</Alert></div>}
+      <Button className="mt-1 min-h-11 w-full" disabled={submitting} type="submit">
+        {submitting ? <><span className="size-4 animate-spin rounded-full border-2 border-white/35 border-t-white" aria-hidden="true" />กำลังเข้าสู่ระบบ…</> : "เข้าสู่ระบบ"}
+      </Button>
     </form>
   );
 }

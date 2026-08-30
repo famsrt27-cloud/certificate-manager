@@ -166,9 +166,15 @@ importers:
       fastify:
         specifier: 5.12.0
         version: 5.12.0
+      jszip:
+        specifier: 3.10.1
+        version: 3.10.1
       pino:
         specifier: 10.3.1
         version: 10.3.1
+      saxes:
+        specifier: 5.0.1
+        version: 5.0.1
       yauzl:
         specifier: 3.4.0
         version: 3.4.0

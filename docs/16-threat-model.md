@@ -275,3 +275,9 @@ M2's targeted source tracing validated three Low-severity availability/correctne
 M3 remediated the four validated findings described above. Defense-in-depth changes also made caught `Error` serialization content-independent, made private S3 reads stop incrementally when `ContentLength` is missing or false, made admin-auth error responses uniformly `no-store`, made the global JSON-parser bound explicit, and tightened direct cursor decoding.
 
 No unresolved validated Critical, High, Medium or Low findings were identified within the tested Phase 7 scope. This is calibrated evidence for the implemented repository and test conditions, not a claim that the software is perfectly secure or vulnerability-free. Final Phase 7 completion additionally requires the M3 remote Quality and Integration gates to succeed.
+
+## Part 7 public discovery boundary extension
+
+Public search introduces a discovery boundary separate from QR possession. Empty/name-only/wildcard searches, public totals/cursors, revoked history and non-public lifecycle rows are prohibited. Organization opt-in defaults off; exact approved combinations, UTF-8 ceilings, an `AVAILABLE` issuance-snapshot query, a five-per-minute distributed network limit and a ten-result ceiling with no partial page constrain people-directory enumeration.
+
+Search-result capability confusion and stale-state races are controlled through the distinct `CSRT` type/audience and 180-second default TTL. QR/download tokens fail before search-result lookup. Exchange checks the current publication before minting `CDT`, and unchanged final redemption checks current publication again, so AVAILABLE-at-search then REVOKED-before-download fails safely.

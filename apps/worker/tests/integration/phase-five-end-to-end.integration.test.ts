@@ -24,6 +24,7 @@ import { ApplicationError } from "../../../api/src/errors/application-error.js";
 import { OrganizationAuthorizationService } from "../../../api/src/modules/auth/organization-authorization-service.js";
 import type { AuthenticatedContext, AuthenticationService } from "../../../api/src/modules/auth/authentication-service.js";
 import { PhaseFiveService } from "../../../api/src/modules/phase-five/phase-five-service.js";
+import { AdminCertificatePdfService } from "../../../api/src/modules/phase-six/admin-certificate-pdf-service.js";
 import { CertificateGenerationProcessor } from "../../src/processors/certificate-generation-processor.js";
 import { QueueOutboxDispatcher } from "../../src/queue-outbox-dispatcher.js";
 
@@ -183,7 +184,13 @@ describe.skipIf(!enabled)("Phase Five API to private storage end-to-end integrat
         service: new PhaseFiveService({
           database,
           verificationKeyKid: "key-2026-01",
+          cursorSecret: "synthetic-phase-five-end-to-end-cursor-secret",
           now: () => plannedIssuedAt
+        }),
+        certificatePdf: new AdminCertificatePdfService({
+          repository: { findByOrganizationAndId: async () => null },
+          storage: { get: async () => { throw new Error("Unexpected admin PDF read"); } },
+          maximumPdfBytes: 1
         })
       }
     });

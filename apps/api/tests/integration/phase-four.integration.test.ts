@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   archiveTemplateAssetInTransaction,
@@ -10,6 +10,7 @@ import {
 import type { EffectiveIdentity } from "@certificate-platform/domain";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import request from "supertest";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildApi } from "../../src/app.js";
@@ -115,6 +116,75 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(published.status).toBe(200);
     expect(published.body.data.status).toBe("PUBLISHED");
     expect(published.body.data.published_at).toBeTruthy();
+  });
+
+  it("returns one bounded deterministic library preview per template with published preference", async () => {
+    const definition = { format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+      { type: "text", x: 20, y: 20, width: 300, height: 40,
+        font: { family: "Noto Sans Thai", size: 24 }, text: "Draft preview" }
+    ] };
+    const higherDraft = await admin(request(app.server).post(`/api/admin/templates/${templateId}/versions`)).send({ definition });
+    expect(higherDraft.status).toBe(201);
+    const draftOnly = await admin(request(app.server).post("/api/admin/templates")).send({ name: `Draft only ${randomUUID()}` });
+    const draftOnlyVersion = await admin(request(app.server).post(`/api/admin/templates/${draftOnly.body.data.id}/versions`)).send({ definition });
+    const empty = await admin(request(app.server).post("/api/admin/templates")).send({ name: `Empty ${randomUUID()}` });
+
+    const listed = await request(app.server).get("/api/admin/templates?limit=100").set("x-organization-id", organizationId);
+    expect(listed.status).toBe(200);
+    const publishedItem = listed.body.data.find((item: { id: string }) => item.id === templateId);
+    const draftItem = listed.body.data.find((item: { id: string }) => item.id === draftOnly.body.data.id);
+    const emptyItem = listed.body.data.find((item: { id: string }) => item.id === empty.body.data.id);
+    expect(publishedItem.preview).toMatchObject({ version: 1, status: "PUBLISHED" });
+    expect(publishedItem.preview.definition.elements.some((element: { type: string }) => element.type === "image")).toBe(true);
+    expect(draftItem.preview).toMatchObject({ version: draftOnlyVersion.body.data.version, status: "DRAFT", definition });
+    expect(emptyItem.preview).toBeNull();
+  });
+
+  it("serves only tenant-scoped ACTIVE PNG/JPEG preview bytes and denies other templates, tenants, MIME types, and states", async () => {
+    const context = { organizationId, actorUserId: userId, actorMembershipId: membershipId,
+      membership: null, superAdmin: false } as const;
+    const previewTemplate = await service.createTemplate(context, { name: `Preview ${randomUUID()}` }, randomUUID());
+    const png = await service.uploadAsset(context, previewTemplate.id, { filename: "preview.png",
+      declaredMimeType: "image/png", bytes: onePixelPng }, randomUUID());
+    const jpegBytes = await sharp({ create: { width: 2, height: 1, channels: 3, background: "#ffffff" } }).jpeg().toBuffer();
+    const jpeg = await service.uploadAsset(context, previewTemplate.id, { filename: "preview.jpg",
+      declaredMimeType: "image/jpeg", bytes: jpegBytes }, randomUUID());
+
+    for (const [asset, mime, bytes] of [[png, "image/png", onePixelPng], [jpeg, "image/jpeg", jpegBytes]] as const) {
+      const response = await request(app.server).get(`/api/admin/templates/${previewTemplate.id}/assets/${asset.id}/content`)
+        .set("x-organization-id", organizationId).buffer(true).parse((response, callback) => {
+          const chunks: Buffer[] = []; response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => callback(null, Buffer.concat(chunks)));
+        });
+      expect(response.status).toBe(200); expect(response.headers["content-type"]).toContain(mime);
+      expect(response.headers["cache-control"]).toBe("private, no-store");
+      expect(Buffer.from(response.body as Buffer)).toEqual(Buffer.from(bytes));
+      expect(JSON.stringify(response.headers)).not.toContain("template-assets/");
+    }
+
+    const otherTemplate = await service.createTemplate(context, { name: `Other ${randomUUID()}` }, randomUUID());
+    expect((await request(app.server).get(`/api/admin/templates/${otherTemplate.id}/assets/${png.id}/content`)
+      .set("x-organization-id", organizationId)).status).toBe(404);
+    expect((await request(app.server).get(`/api/admin/templates/${previewTemplate.id}/assets/${png.id}/content`)
+      .set("x-organization-id", otherOrganizationId)).status).toBe(404);
+
+    const stateAsset = await service.uploadAsset(context, previewTemplate.id, { filename: "state.png",
+      declaredMimeType: "image/png", bytes: onePixelPng }, randomUUID());
+    for (const status of ["QUARANTINED", "REJECTED", "ARCHIVED"] as const) {
+      await database.updateTable("template_assets").set({ status }).where("id", "=", stateAsset.id).execute();
+      expect((await request(app.server).get(`/api/admin/templates/${previewTemplate.id}/assets/${stateAsset.id}/content`)
+        .set("x-organization-id", organizationId)).status).toBe(404);
+    }
+
+    const fontId = randomUUID(); const fontKey = `template-assets/${organizationId}/${previewTemplate.id}/${fontId}/font.ttf`;
+    const fontBytes = Buffer.alloc(64, 0); objects.set(fontKey, fontBytes);
+    await database.insertInto("template_assets").values({ id: fontId, organization_id: organizationId,
+      template_id: previewTemplate.id, storage_key: fontKey, original_filename: "private.ttf",
+      content_sha256: createHash("sha256").update(fontBytes).digest(), detected_mime_type: "font/ttf",
+      size_bytes: String(fontBytes.byteLength), width_px: null, height_px: null, status: "ACTIVE",
+      created_by_membership_id: membershipId }).execute();
+    expect((await request(app.server).get(`/api/admin/templates/${previewTemplate.id}/assets/${fontId}/content`)
+      .set("x-organization-id", organizationId)).status).toBe(404);
   });
 
   it("rolls back an asset row and removes stored content when its audit insert fails", async () => {
