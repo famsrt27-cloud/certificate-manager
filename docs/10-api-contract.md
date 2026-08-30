@@ -324,6 +324,34 @@ Only a job in `AWAITING_CONFIRMATION` may be confirmed. Confirmation resumes asy
 
 Confirmation is PostgreSQL-state-idempotent for the organization/job/operation. A repeated request with the required `Idempotency-Key` returns the current safe job status and cannot create duplicate participants or training relationships. A non-empty `external_reference` is matched exactly within the organization under a transaction lock; missing references create distinct participants and display names are never deduplication keys.
 
+### List admin certificates
+
+`GET /api/admin/certificates`
+
+Permission: `certificate:read`
+
+Cursor-paginated with `limit` 1-100 (default 50). Optional bounded filters are `training_id` and canonical certificate `status`. The query is explicitly organization-scoped and reads recipient, project, training and issue-time display fields from the immutable issuance snapshot. It returns the internal certificate ID only for authorized admin actions, certificate number, lifecycle status, snapshot display fields, training ID, issue/revocation timestamps and the private bounded revocation reason. It never returns a public identifier, participant external reference, verification token/key material, PDF storage key/URL/hash, or job payload.
+
+### View or download an admin certificate PDF
+
+`GET /api/admin/certificates/{certificateId}/pdf`
+
+Permission: `certificate:download`
+
+Requires an authenticated admin session and `X-Organization-ID`. The certificate lookup is explicitly scoped to the selected organization and only an `AVAILABLE` certificate with complete, valid PDF publication metadata may be returned. `certificate:read` does not grant PDF access.
+
+Optional query parameter `disposition` is `inline` by default and may be `attachment`. Both modes read the same private object through the application, enforce the configured PDF size bound, expected byte length, `%PDF-` signature and SHA-256 digest, then re-read persisted state and publication identity after storage access. A concurrent revocation or publication change fails closed.
+
+Response `200`:
+
+- `Content-Type: application/pdf`
+- `Content-Disposition: inline|attachment; filename="certificate-<sanitized-certificate-number>.pdf"`
+- `Cache-Control: private, no-store`
+- `X-Content-Type-Options: nosniff`
+- `X-Request-ID: <uuid>`
+
+No storage key, storage URL, public identifier or verification/download token is exposed.
+
 ### Generate certificates
 
 `POST /api/admin/trainings/{trainingId}/certificates/generate`
@@ -409,6 +437,7 @@ Permission: `certificate:revoke`
 ```
 
 Revocation is atomic, idempotent for the same effective state and audited. The reason is private admin data.
+Only an `AVAILABLE` certificate may transition to `REVOKED`; a repeated request for an already-revoked certificate returns its current immutable admin representation without changing its original reason or creating a second audit event. Other lifecycle states conflict. Tenant scope is applied to both the lock and update, and revocation does not delete the stored PDF. Public verification and download authorization consult current persisted state and therefore reflect revocation immediately.
 
 ## Public security policy
 

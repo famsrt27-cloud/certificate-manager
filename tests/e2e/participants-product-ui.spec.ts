@@ -78,6 +78,28 @@ test("uploads once, maps validation errors, paginates preview, confirms, and ref
   await dialog.getByRole("button", { name: "ดูผู้เข้าร่วมในการอบรมนี้" }).click(); await expect(page.locator("td:visible, h3:visible", { hasText: "ผู้เข้าร่วมใหม่" }).first()).toBeVisible(); expect(participantLoads).toBeGreaterThanOrEqual(2);
 });
 
+test("does not append preview row 19 twice when the same cursor page is requested repeatedly", async ({ page }) => {
+  await routeSession(page); await routeTrainings(page); const consoleErrors: string[] = []; let secondPageLoads = 0;
+  page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  await page.route("**/api/admin/participants?**", (route) => route.fulfill({ json: { data: [], meta: { request_id: requestId, next_cursor: null } } }));
+  await page.route(`**/api/admin/trainings/${trainingA}/participants/import`, (route) => route.fulfill({ status: 202, json: { data: { job_id: jobId, status: "QUEUED" }, meta: { request_id: requestId } } }));
+  await page.route(`**/api/admin/participant-imports/${jobId}?**`, async (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    if (cursor !== null) { secondPageLoads += 1; await new Promise((resolve) => setTimeout(resolve, 120)); return route.fulfill({ json: { data: { job_id: jobId, status: "AWAITING_CONFIRMATION", progress: { completed: 18, total: 18 }, counts: { valid: 18, invalid: 0 }, preview: [{ row_number: 19, display_name: "แถวที่สิบเก้า", external_reference: "ROW-19", status: "VALID", validation_errors: [] }] }, meta: { request_id: requestId, next_cursor: null } } }); }
+    return route.fulfill({ json: { data: { job_id: jobId, status: "AWAITING_CONFIRMATION", progress: { completed: 18, total: 18 }, counts: { valid: 18, invalid: 0 }, preview: [{ row_number: 18, display_name: "แถวที่สิบแปด", external_reference: "ROW-18", status: "VALID", validation_errors: [] }] }, meta: { request_id: requestId, next_cursor: "preview-after-18" } } });
+  });
+  await page.goto("/admin/participants"); await page.getByRole("button", { name: "นำเข้าผู้เข้าร่วม", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "นำเข้าผู้เข้าร่วม" });
+  await dialog.getByLabel("ไฟล์รายชื่อ CSV หรือ XLSX").setInputFiles({ name: "rows.csv", mimeType: "text/csv", buffer: Buffer.from("display_name\nแถวที่สิบเก้า\n") });
+  await dialog.getByRole("button", { name: "อัปโหลดและตรวจสอบ" }).click(); await expect(dialog.getByText("แถวที่สิบแปด").first()).toBeVisible();
+  const more = dialog.getByRole("button", { name: "โหลดรายการตัวอย่างเพิ่มเติม" });
+  await more.evaluate((button) => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
+  await expect(dialog.getByText("แถวที่สิบเก้า").first()).toBeVisible();
+  expect(secondPageLoads).toBe(1); expect(await dialog.locator("tbody tr", { hasText: "แถวที่สิบเก้า" }).count()).toBe(1);
+  expect(await dialog.locator("li", { hasText: "แถวที่สิบเก้า" }).count()).toBe(1);
+  expect(consoleErrors.some((message) => message.includes("same key") || message.includes("Encountered two children"))).toBe(false);
+});
+
 test("shows role-aware prerequisites and clears an active import when organization changes", async ({ page }) => {
   await routeSession(page, writePermissions, true);
   await page.route("**/api/admin/trainings?**", (route) => { const organization = route.request().headers()["x-organization-id"]; return route.fulfill({ json: { data: organization === organizationA ? [training(trainingA, "การอบรมองค์กร A")] : [], meta: { request_id: requestId, next_cursor: null } } }); });

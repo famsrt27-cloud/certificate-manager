@@ -142,6 +142,7 @@ export function ParticipantManagement({ csrfToken, membership }: { readonly csrf
   const [inspectionError, setInspectionError] = useState(false); const [jobError, setJobError] = useState<string | null>(null); const [pollTick, setPollTick] = useState(0);
   const uploadKey = useRef<string | null>(null); const confirmKey = useRef<string | null>(null); const successHandled = useRef<string | null>(null);
   const operationController = useRef<AbortController | null>(null);
+  const previewPageRequest = useRef<{ readonly jobId: string; readonly cursor: string; readonly controller: AbortController } | null>(null);
   const activeTrainings = useMemo(() => trainings.filter((training) => training.status === "ACTIVE"), [trainings]);
   const selectedTraining = useMemo(() => trainings.find((training) => training.id === selectedTrainingId), [selectedTrainingId, trainings]);
 
@@ -180,20 +181,45 @@ export function ParticipantManagement({ csrfToken, membership }: { readonly csrf
   }, [adminFetch, jobId, jobStatus, permissions]);
 
   useEffect(() => { if (jobStatus !== "SUCCEEDED" || jobId === null || successHandled.current === jobId) return; successHandled.current = jobId; const timer = window.setTimeout(() => { setParticipantsLoading(selectedTrainingId !== ""); setRefreshKey((value) => value + 1); }, 0); return () => window.clearTimeout(timer); }, [jobId, jobStatus, selectedTrainingId]);
-  useEffect(() => () => operationController.current?.abort(), []);
+  useEffect(() => () => { operationController.current?.abort(); previewPageRequest.current?.controller.abort(); }, []);
 
   const clearFile = () => { setImportFile(null); setFileError(null); setFileInputKey((value) => value + 1); uploadKey.current = null; };
-  const resetImport = () => { clearFile(); setJobId(null); setJobTraining(null); setJobStatus(null); setInspection(null); setPreviewRows([]); setPreviewNextCursor(null); setInspectionError(false); setJobError(null); confirmKey.current = null; successHandled.current = null; setImportTrainingId(selectedTraining?.status === "ACTIVE" ? selectedTraining.id : activeTrainings[0]?.id ?? ""); };
+  const resetImport = () => { previewPageRequest.current?.controller.abort(); previewPageRequest.current = null; clearFile(); setJobId(null); setJobTraining(null); setJobStatus(null); setInspection(null); setPreviewRows([]); setPreviewNextCursor(null); setInspectionError(false); setJobError(null); confirmKey.current = null; successHandled.current = null; setImportTrainingId(selectedTraining?.status === "ACTIVE" ? selectedTraining.id : activeTrainings[0]?.id ?? ""); };
   const openImport = () => { if (jobId === null) setImportTrainingId(selectedTraining?.status === "ACTIVE" ? selectedTraining.id : activeTrainings[0]?.id ?? ""); setFeedback(null); setImportOpen(true); };
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0] ?? null; uploadKey.current = null; setFileError(null); if (file === null) { setImportFile(null); return; } const extension = file.name.split(".").pop()?.toLowerCase() ?? ""; if (!acceptedExtensions.has(extension)) { setImportFile(null); setFileError("รองรับเฉพาะไฟล์ CSV หรือ XLSX"); return; } if (file.size > importMaximumBytes) { setImportFile(null); setFileError("ไฟล์มีขนาดเกิน 5 MB"); return; } setImportFile(file); };
 
   const upload = async (event: FormEvent) => { event.preventDefault(); if (importTrainingId === "" || importFile === null || uploadPending) return; const training = activeTrainings.find((item) => item.id === importTrainingId); if (training === undefined) { setFileError("กรุณาเลือกการอบรมที่ใช้งานอยู่"); return; } const key = uploadKey.current ?? crypto.randomUUID(); uploadKey.current = key; setUploadPending(true); setInspectionError(false);
     const controller = new AbortController(); operationController.current = controller;
-    try { const body = new FormData(); body.set("file", importFile); const response = await adminFetch(`/admin/trainings/${importTrainingId}/participants/import`, { method: "POST", headers: { "Idempotency-Key": key }, body, signal: controller.signal }); const responseBody: unknown = await response.json(); const parsed = ParticipantImportQueuedResponseSchema.safeParse(responseBody); if (!response.ok || !parsed.success) throw new Error("upload failed"); setJobId(parsed.data.data.job_id); setJobStatus(parsed.data.data.status); setJobTraining(training); setInspection(null); setPreviewRows([]); setPreviewNextCursor(null); setJobError(null); confirmKey.current = null; setPollTick((value) => value + 1); }
+    try { const body = new FormData(); body.set("file", importFile); const response = await adminFetch(`/admin/trainings/${importTrainingId}/participants/import`, { method: "POST", headers: { "Idempotency-Key": key }, body, signal: controller.signal }); const responseBody: unknown = await response.json(); const parsed = ParticipantImportQueuedResponseSchema.safeParse(responseBody); if (!response.ok || !parsed.success) throw new Error("upload failed"); previewPageRequest.current?.controller.abort(); previewPageRequest.current = null; setJobId(parsed.data.data.job_id); setJobStatus(parsed.data.data.status); setJobTraining(training); setInspection(null); setPreviewRows([]); setPreviewNextCursor(null); setJobError(null); confirmKey.current = null; setPollTick((value) => value + 1); }
     catch (reason: unknown) { if (!(reason instanceof DOMException && reason.name === "AbortError")) setFileError("ไม่สามารถส่งไฟล์เพื่อตรวจสอบได้ กรุณาลองอีกครั้งโดยใช้ไฟล์เดิม"); } finally { if (operationController.current === controller) operationController.current = null; setUploadPending(false); }
   };
 
-  const loadMorePreview = async () => { if (jobId === null || previewNextCursor === null || previewPending) return; setPreviewPending(true); try { const query = new URLSearchParams({ limit: String(previewPageSize), cursor: previewNextCursor }); const response = await adminFetch(`/admin/participant-imports/${jobId}?${query}`); const body: unknown = await response.json(); const parsed = ParticipantImportInspectResponseSchema.safeParse(body); if (!response.ok || !parsed.success || parsed.data.data.job_id !== jobId) throw new Error("preview failed"); setPreviewRows((current) => [...current, ...parsed.data.data.preview]); setPreviewNextCursor(parsed.data.meta.next_cursor); } catch { setInspectionError(true); } finally { setPreviewPending(false); } };
+  const loadMorePreview = async () => {
+    if (jobId === null || previewNextCursor === null || previewPageRequest.current !== null) return;
+    const requestedJobId = jobId; const requestedCursor = previewNextCursor; const controller = new AbortController();
+    previewPageRequest.current = { jobId: requestedJobId, cursor: requestedCursor, controller }; setPreviewPending(true);
+    try {
+      const query = new URLSearchParams({ limit: String(previewPageSize), cursor: requestedCursor });
+      const response = await adminFetch(`/admin/participant-imports/${requestedJobId}?${query}`, { signal: controller.signal });
+      const body: unknown = await response.json(); const parsed = ParticipantImportInspectResponseSchema.safeParse(body);
+      if (!response.ok || !parsed.success || parsed.data.data.job_id !== requestedJobId) throw new Error("preview failed");
+      if (previewPageRequest.current?.jobId !== requestedJobId || previewPageRequest.current.cursor !== requestedCursor) return;
+      setPreviewRows((current) => {
+        const rowsByNumber = new Map(current.map((row) => [row.row_number, row]));
+        for (const row of parsed.data.data.preview) {
+          if (!rowsByNumber.has(row.row_number)) rowsByNumber.set(row.row_number, row);
+        }
+        return [...rowsByNumber.values()].sort((left, right) => left.row_number - right.row_number);
+      });
+      setPreviewNextCursor(parsed.data.meta.next_cursor);
+    } catch (reason: unknown) {
+      if (!(reason instanceof DOMException && reason.name === "AbortError")) setInspectionError(true);
+    } finally {
+      if (previewPageRequest.current?.jobId === requestedJobId && previewPageRequest.current.cursor === requestedCursor) {
+        previewPageRequest.current = null; setPreviewPending(false);
+      }
+    }
+  };
   const confirmImport = async () => { if (jobId === null || jobStatus !== "AWAITING_CONFIRMATION" || (inspection?.counts.valid ?? 0) === 0 || confirmPending) return; const key = confirmKey.current ?? crypto.randomUUID(); confirmKey.current = key; setConfirmPending(true); const controller = new AbortController(); operationController.current = controller;
     try { const response = await adminFetch(`/admin/participant-imports/${jobId}/confirm`, { method: "POST", headers: { "Idempotency-Key": key }, signal: controller.signal }); const body: unknown = await response.json(); const parsed = ParticipantImportQueuedResponseSchema.safeParse(body); if (!response.ok || !parsed.success || parsed.data.data.job_id !== jobId) throw new Error("confirm failed"); setJobStatus(parsed.data.data.status); setPollTick((value) => value + 1); }
     catch (reason: unknown) { if (!(reason instanceof DOMException && reason.name === "AbortError")) setInspectionError(true); } finally { if (operationController.current === controller) operationController.current = null; setConfirmPending(false); }

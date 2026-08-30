@@ -141,6 +141,8 @@ OpenAPI paths must match these `docs/10-api-contract.md` operations exactly:
 - `POST /api/admin/participant-imports/{jobId}/confirm`
 - `POST /api/admin/trainings/{trainingId}/certificates/generate`
 - `GET /api/admin/jobs/{jobId}`
+- `GET /api/admin/certificates`
+- `GET /api/admin/certificates/{certificateId}/pdf`
 - `POST /api/admin/certificates/{certificateId}/revoke`
 - `POST /api/public/verify`
 - `POST /api/public/certificates/download-authorize`

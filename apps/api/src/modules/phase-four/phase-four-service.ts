@@ -103,7 +103,7 @@ export class PhaseFourService {
     const page = rows.slice(0, input.limit);
     const previews = await listTemplatePreviewVersions(this.#database, organizationId, page.map((row) => row.id));
     const previewByTemplate = new Map(previews.map((row) => [row.template_id, {
-      version: row.version, status: row.status, definition: parseDefinition(row.definition_json)
+      version_id: row.id, version: row.version, status: row.status, definition: parseDefinition(row.definition_json)
     }]));
     const last = page.at(-1);
     return { data: page.map((row) => ({ ...mapTemplate(row), preview: previewByTemplate.get(row.id) ?? null })), nextCursor: rows.length > input.limit && last !== undefined

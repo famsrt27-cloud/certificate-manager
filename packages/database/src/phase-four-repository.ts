@@ -50,7 +50,7 @@ export const listTemplatePreviewVersions = async (
   if (templateIds.length === 0) return [];
   return database.selectFrom("template_versions")
     .distinctOn("template_id")
-    .select(["template_id", "version", "definition_json", "status"])
+    .select(["id", "template_id", "version", "definition_json", "status"])
     .where("organization_id", "=", organizationId)
     .where("template_id", "in", templateIds)
     .orderBy("template_id")

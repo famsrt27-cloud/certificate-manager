@@ -9,7 +9,9 @@ import {
   TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
   UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema,
   DashboardSummaryResponseSchema, PublicCertificateDownloadRequestSchema, PublicDownloadAuthorizationRequestSchema,
-  PublicDownloadAuthorizationResponseSchema, PublicVerificationRequestSchema, PublicVerificationResponseSchema
+  PublicDownloadAuthorizationResponseSchema, PublicVerificationRequestSchema, PublicVerificationResponseSchema,
+  AdminCertificateResponseSchema, CertificateGenerationQueuedResponseSchema, CertificateListResponseSchema,
+  GenerateCertificatesRequestSchema, RevokeCertificateRequestSchema
 } from "@certificate-platform/contracts";
 import { z } from "zod";
 
@@ -160,6 +162,37 @@ export const openApiDocument = {
     },
     "/api/admin/templates/{templateId}/assets/{assetId}/archive": {
       post: writeOperation("template:asset:create", TemplateAssetResponseSchema, [pathId("templateId"), pathId("assetId")])
+    },
+    "/api/admin/certificates": {
+      get: readOperation("certificate:read", CertificateListResponseSchema, [cursorParameter, limitParameter,
+        { name: "training_id", in: "query", required: false, schema: { type: "string", format: "uuid" } },
+        { name: "status", in: "query", required: false, schema: { type: "string",
+          enum: ["DRAFT", "GENERATING", "ISSUED", "AVAILABLE", "REVOKED", "ARCHIVED"] } }])
+    },
+    "/api/admin/certificates/{certificateId}/pdf": {
+      get: {
+        security: adminSecurity,
+        "x-required-permission": "certificate:download",
+        parameters: [organizationParameter, pathId("certificateId"), { name: "disposition", in: "query", required: false,
+          schema: { type: "string", enum: ["inline", "attachment"], default: "inline" } }],
+        responses: {
+          "200": { description: "Authenticated tenant-scoped certificate PDF", headers: {
+            "Content-Disposition": { schema: { type: "string" } },
+            "Cache-Control": { schema: { type: "string" } },
+            "X-Content-Type-Options": { schema: { type: "string" } },
+            "X-Request-ID": { schema: { type: "string", format: "uuid" } }
+          }, content: { "application/pdf": { schema: { type: "string", format: "binary" } } } },
+          ...errors
+        }
+      }
+    },
+    "/api/admin/trainings/{trainingId}/certificates/generate": {
+      post: writeOperation("certificate:generate", CertificateGenerationQueuedResponseSchema,
+        [pathId("trainingId"), idempotencyParameter], GenerateCertificatesRequestSchema, 202)
+    },
+    "/api/admin/certificates/{certificateId}/revoke": {
+      post: writeOperation("certificate:revoke", AdminCertificateResponseSchema,
+        [pathId("certificateId")], RevokeCertificateRequestSchema)
     },
     "/api/public/verify": { post: { security: [], requestBody: jsonRequest(PublicVerificationRequestSchema),
       responses: { ...response(200, PublicVerificationResponseSchema), ...response(400, ErrorResponseSchema),

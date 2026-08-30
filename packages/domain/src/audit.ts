@@ -23,7 +23,8 @@ export const AUDIT_ACTIONS = [
   "TEMPLATE_VERSION_ARCHIVED",
   "TEMPLATE_ASSET_CREATED",
   "TEMPLATE_ASSET_ARCHIVED",
-  "CERTIFICATE_GENERATION_REQUESTED"
+  "CERTIFICATE_GENERATION_REQUESTED",
+  "CERTIFICATE_REVOKED"
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
@@ -34,7 +35,7 @@ export interface AuditEvent {
   readonly actorMembershipId: string | null;
   readonly action: AuditAction;
   readonly resourceType: "authentication" | "authorization" | "project" | "training" | "participant" | "participant_import"
-    | "template" | "template_version" | "template_asset" | "certificate_generation";
+    | "template" | "template_version" | "template_asset" | "certificate_generation" | "certificate";
   readonly resourceId: string | null;
   readonly requestId: string;
   readonly metadata:

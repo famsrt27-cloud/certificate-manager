@@ -183,6 +183,7 @@ describe.skipIf(!enabled)("Phase Five API to private storage end-to-end integrat
         service: new PhaseFiveService({
           database,
           verificationKeyKid: "key-2026-01",
+          cursorSecret: "synthetic-phase-five-end-to-end-cursor-secret",
           now: () => plannedIssuedAt
         })
       }

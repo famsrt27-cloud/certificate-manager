@@ -179,8 +179,8 @@ const normalizeSpreadsheetXmlNamespaces = (content: string): string | undefined 
   let foundPrefixedSpreadsheetElement = false;
   parser.on("doctype", () => { throw new Error("OOXML DTDs are not allowed"); });
   parser.on("xmldecl", (declaration) => {
-    const standalone = declaration.standalone === undefined ? "" : ` standalone=\"${escapeXmlAttribute(declaration.standalone)}\"`;
-    output.push(`<?xml version=\"${escapeXmlAttribute(declaration.version ?? "1.0")}\" encoding=\"UTF-8\"${standalone}?>`);
+    const standalone = declaration.standalone === undefined ? "" : ` standalone="${escapeXmlAttribute(declaration.standalone)}"`;
+    output.push(`<?xml version="${escapeXmlAttribute(declaration.version ?? "1.0")}" encoding="UTF-8"${standalone}?>`);
   });
   parser.on("processinginstruction", ({ target, body }) => output.push(`<?${target}${body.length === 0 ? "" : ` ${body}`}?>`));
   parser.on("comment", (comment) => output.push(`<!--${comment}-->`));
@@ -202,9 +202,9 @@ const normalizeSpreadsheetXmlNamespaces = (content: string): string | undefined 
 
     output.push(`<${outputName}`);
     for (const attribute of Object.values(tag.attributes)) {
-      if (attribute.name !== "xmlns") output.push(` ${attribute.name}=\"${escapeXmlAttribute(attribute.value)}\"`);
+      if (attribute.name !== "xmlns") output.push(` ${attribute.name}="${escapeXmlAttribute(attribute.value)}"`);
     }
-    if (defaultNamespace !== parentDefaultNamespace) output.push(` xmlns=\"${escapeXmlAttribute(defaultNamespace)}\"`);
+    if (defaultNamespace !== parentDefaultNamespace) output.push(` xmlns="${escapeXmlAttribute(defaultNamespace)}"`);
     output.push(tag.isSelfClosing ? "/>" : ">");
     elements.push({ outputName, selfClosing: tag.isSelfClosing, defaultNamespace });
   });

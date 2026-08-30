@@ -41,7 +41,7 @@ export const TemplateListQuerySchema = z.object({
   status: RecordStatusSchema.optional()
 }).strict();
 export const TemplateListPreviewSchema = z.object({
-  version: z.number().int().positive(), status: TemplateVersionStatusSchema,
+  version_id: z.uuid().optional(), version: z.number().int().positive(), status: TemplateVersionStatusSchema,
   definition: TemplateDefinitionSchema
 });
 export const TemplateListItemSchema = TemplateSchema.extend({ preview: TemplateListPreviewSchema.nullable() });

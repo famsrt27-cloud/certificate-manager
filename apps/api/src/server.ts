@@ -5,6 +5,7 @@ import {
   closeDatabase,
   createDatabase,
   findPublicCertificateDownload,
+  findAdminCertificatePdf,
   findPublicCertificateDownloadAuthorization,
   findAuthenticationUser,
   findPublicCertificateVerification,
@@ -30,6 +31,7 @@ import { DashboardService } from "./modules/dashboard/dashboard-service.js";
 import { PublicVerificationService } from "./modules/phase-six/public-verification-service.js";
 import { PublicDownloadAuthorizationService } from "./modules/phase-six/public-download-authorization-service.js";
 import { PublicCertificateDownloadService } from "./modules/phase-six/public-certificate-download-service.js";
+import { AdminCertificatePdfService } from "./modules/phase-six/admin-certificate-pdf-service.js";
 
 const environment = loadApiEnvironment();
 const database = createDatabase({
@@ -99,7 +101,8 @@ const phaseThreeService = new PhaseThreeService({
   cursorSecret: environment.SESSION_SECRET
 });
 const phaseFourService = new PhaseFourService({ database, storage, cursorSecret: environment.SESSION_SECRET });
-const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID });
+const phaseFiveService = new PhaseFiveService({ database, verificationKeyKid: environment.VERIFICATION_ACTIVE_KID,
+  cursorSecret: environment.SESSION_SECRET });
 const dashboardService = new DashboardService(database);
 const publicVerificationService = new PublicVerificationService({
   verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
@@ -133,6 +136,12 @@ const publicCertificateDownloadService = new PublicCertificateDownloadService({
   storage,
   maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
 });
+const adminCertificatePdfService = new AdminCertificatePdfService({
+  repository: { findByOrganizationAndId: (organizationId, certificateId) =>
+    findAdminCertificatePdf(database, organizationId, certificateId) },
+  storage,
+  maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
+});
 const publicCertificateDownloadRateLimiter = new PublicVerificationRateLimiter(authRedis, {
   secret: environment.SESSION_SECRET,
   windowSeconds: environment.PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS,
@@ -163,7 +172,8 @@ const app = buildApi({
     service: phaseFourService,
     templateAssetMaxBytes: environment.TEMPLATE_ASSET_MAX_BYTES
   },
-  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService },
+  phaseFive: { authentication: authenticationService, authorization, service: phaseFiveService,
+    certificatePdf: adminCertificatePdfService },
   dashboard: { authentication: authenticationService, authorization, service: dashboardService },
   publicVerification: { service: publicVerificationService, rateLimiter: publicVerificationRateLimiter },
   publicDownloadAuthorization: { service: publicDownloadAuthorizationService,

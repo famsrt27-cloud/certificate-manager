@@ -13,9 +13,18 @@ describe("OpenAPI document", () => {
       "/api/admin/templates/{templateId}/versions", "/api/admin/templates/{templateId}/versions/{versionId}",
       "/api/admin/templates/{templateId}/versions/{versionId}/preview",
       "/api/admin/templates/{templateId}/versions/{versionId}/publish", "/api/admin/templates/{templateId}/assets",
+      "/api/admin/certificates", "/api/admin/trainings/{trainingId}/certificates/generate",
+      "/api/admin/certificates/{certificateId}/pdf", "/api/admin/certificates/{certificateId}/revoke",
       "/api/public/verify", "/api/public/certificates/download-authorize",
       "/api/public/certificates/download"
     ]));
+  });
+
+  it("documents tenant-authenticated certificate PDF access separately from metadata read", () => {
+    const operation = openApiDocument.paths["/api/admin/certificates/{certificateId}/pdf"].get;
+    expect(operation["x-required-permission"]).toBe("certificate:download");
+    expect(operation.responses[200].content["application/pdf"].schema).toEqual({ type: "string", format: "binary" });
+    expect(JSON.stringify(operation)).not.toMatch(/storage_key|bucket|object_url|public_identifier|verification_token|sha256/i);
   });
 
   it("describes binary certificate redemption without storage or identifier disclosure", () => {
