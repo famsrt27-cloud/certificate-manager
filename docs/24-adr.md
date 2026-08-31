@@ -304,3 +304,20 @@ Public discovery is an organization-opt-in boundary with default off. Included c
 Each result carries a distinct 180-second search-result capability. Its exchange rechecks current publication state and issues the existing download capability, so private object storage and final redemption controls remain unchanged. The base schema/policy extension is recorded in migration `202608300009_public-certificate-search`; the indexed canonical title handling is recorded in migration `202608310010_canonical-recipient-name-search`. Administration is limited to one organization-level toggle on the existing dashboard rather than a new settings subsystem.
 
 Public project/training discovery is label-only and prefix-gated against the same opted-in `AVAILABLE` snapshot boundary. No stable public context identifier is needed because the selected canonical label is submitted to the existing exact normalized search contract. The current policy remains organization-wide. A possible future enhancement is per-training public-search visibility, but it requires a separately reviewed domain/schema/API change and is not implemented here.
+
+## ADR-019: Production Admin TOTP MFA Gate
+
+Status: Accepted
+
+Decision:
+
+Production requires application-owned RFC 6238 TOTP after password verification. Password success creates only a five-minute encrypted Redis challenge; it never creates a full admin session. A missing factor enters explicit enrollment, while an existing factor enters verification. TOTP uses SHA-1, six digits, a 30-second period and a one-step skew window. PostgreSQL atomically advances the last accepted timestep to prevent replay. Ten random 144-bit recovery codes are issued once at enrollment, retained only as salted scrypt hashes, and removed atomically on use.
+
+TOTP secrets and pending enrollment material are encrypted with AES-256-GCM under a dedicated 32-byte environment key. Production configuration fails unless the policy is `REQUIRED` and the key is valid. MFA assurance is recorded in the server-side session so legacy or deferred sessions cannot satisfy required mode. Origin checks, generic failures, login throttling, tenant authorization, CSRF after session creation, rotation and logout remain unchanged.
+
+Consequences:
+
+- Migration `202608310011_admin-mfa` is the only schema addition and historical migrations remain unchanged.
+- The application owns enrollment and recovery; no upstream header or claim can bypass the factor.
+- Recovery codes are shown once after successful enrollment and cannot be recovered from storage.
+- Encryption-key rotation requires an explicit operational re-encryption procedure before replacing the active key.

@@ -1,5 +1,7 @@
-import { hashPassword, LoginRateLimiter, RedisSessionStore, type SessionRedisStore } from "@certificate-platform/auth";
-import { AuthenticationResponseSchema, ErrorResponseSchema, LogoutResponseSchema } from "@certificate-platform/contracts";
+import { hashPassword, LoginRateLimiter, MfaSecretCipher, RedisMfaChallengeStore, RedisSessionStore,
+  totpForTimestep, verifyRecoveryCode, type SessionRedisStore } from "@certificate-platform/auth";
+import { AuthenticationResponseSchema, ErrorResponseSchema, LoginResponseSchema, LogoutResponseSchema,
+  MfaCompletionResponseSchema } from "@certificate-platform/contracts";
 import type { AuditEvent, EffectiveIdentity } from "@certificate-platform/domain";
 import request from "supertest";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -12,6 +14,12 @@ class MemoryAuthRedis implements SessionRedisStore {
   readonly counters = new Map<string, number>();
   fail = false;
   async get(key: string): Promise<string | null> { if (this.fail) throw new Error("secret Redis detail"); return this.values.get(key) ?? null; }
+  async getAndDelete(key: string): Promise<string | null> {
+    if (this.fail) throw new Error("secret Redis detail");
+    const value = this.values.get(key) ?? null;
+    this.values.delete(key);
+    return value;
+  }
   async setWithExpiry(key: string, value: string): Promise<void> { if (this.fail) throw new Error("secret Redis detail"); this.values.set(key, value); }
   async setWithExpiryIfExists(key: string, value: string): Promise<boolean> {
     if (this.fail) throw new Error("secret Redis detail");
@@ -39,7 +47,7 @@ beforeAll(async () => {
   dummyPasswordHash = await hashPassword("constant-dummy-password", 12);
 });
 
-const buildFixture = (accountMaximum = 5, passwordVerifier?: (password: string, hash: string) => Promise<boolean>) => {
+const buildFixture = (accountMaximum = 5, passwordVerifier?: (password: string, hash: string) => Promise<boolean>, mfaRequired = false) => {
   const redis = new MemoryAuthRedis();
   const auditEvents: AuditEvent[] = [];
   let identity: EffectiveIdentity | null = {
@@ -54,6 +62,8 @@ const buildFixture = (accountMaximum = 5, passwordVerifier?: (password: string, 
     }]
   };
   let userStatus: "ACTIVE" | "INACTIVE" | "ARCHIVED" = "ACTIVE";
+  let now = 1_800_000_000_000;
+  let factor: { encryptedTotpSecret: string; recoveryCodeHashes: readonly string[]; lastAcceptedTimestep: number | null } | null = null;
   const identities: IdentityProvider = {
     findByNormalizedEmail: vi.fn(async (email: string) => email === "admin@example.invalid" ? {
       id: userId,
@@ -81,6 +91,30 @@ const buildFixture = (accountMaximum = 5, passwordVerifier?: (password: string, 
     audit: { write: async (event) => { auditEvents.push(event); } },
     allowedOrigins: ["https://admin.example.invalid"],
     dummyPasswordHash,
+    ...(mfaRequired ? {
+      mfaPolicy: "REQUIRED" as const,
+      mfaCipher: new MfaSecretCipher(Buffer.alloc(32, 9)),
+      mfaChallenges: new RedisMfaChallengeStore(redis, Buffer.alloc(32, 9)),
+      mfaFactors: {
+        find: async () => factor,
+        enroll: async (_userId: string, encryptedTotpSecret: string, recoveryCodeHashes: readonly string[], timestep: number) => {
+          if (factor !== null) return false;
+          factor = { encryptedTotpSecret, recoveryCodeHashes, lastAcceptedTimestep: timestep };
+          return true;
+        },
+        acceptTimestep: async (_userId: string, timestep: number) => {
+          if (factor === null || (factor.lastAcceptedTimestep !== null && factor.lastAcceptedTimestep >= timestep)) return false;
+          factor = { ...factor, lastAcceptedTimestep: timestep };
+          return true;
+        },
+        consumeRecoveryHash: async (_userId: string, hash: string) => {
+          if (factor === null || !factor.recoveryCodeHashes.includes(hash)) return false;
+          factor = { ...factor, recoveryCodeHashes: factor.recoveryCodeHashes.filter((candidate) => candidate !== hash) };
+          return true;
+        }
+      },
+      now: () => now
+    } : {}),
     ...(passwordVerifier === undefined ? {} : { passwordVerifier })
   });
   const app = buildApi({
@@ -93,6 +127,8 @@ const buildFixture = (accountMaximum = 5, passwordVerifier?: (password: string, 
     authentication: { service, absoluteTtlSeconds: 28_800 }
   });
   return { app, redis, auditEvents, identities,
+    getFactor: () => factor,
+    advanceTime: (milliseconds: number) => { now += milliseconds; },
     setIdentity: (value: EffectiveIdentity | null) => { identity = value; },
     setUserStatus: (value: "ACTIVE" | "INACTIVE" | "ARCHIVED") => { userStatus = value; } };
 };
@@ -114,6 +150,74 @@ const cookiePair = (response: request.Response): string => {
 };
 
 describe("admin authentication routes", () => {
+  it("requires MFA after password, enrolls TOTP, rejects replay, and consumes a recovery code once", async () => {
+    const fixture = buildFixture(5, undefined, true);
+    await fixture.app.ready();
+
+    const passwordOnly = await login(fixture.app);
+    const pending = LoginResponseSchema.parse(passwordOnly.body);
+    expect(pending.data).toMatchObject({ status: "MFA_ENROLLMENT_REQUIRED" });
+    expect(String(passwordOnly.headers["set-cookie"])).not.toMatch(/__Host-admin_session=[A-Za-z0-9_-]{43}/);
+    expect((await request(fixture.app.server).get("/api/admin/auth/session").set("cookie", cookiePair(passwordOnly))).status).toBe(401);
+
+    if (!("status" in pending.data) || pending.data.status !== "MFA_ENROLLMENT_REQUIRED") throw new Error("expected enrollment");
+    const secret = new URL(pending.data.provisioning_uri).searchParams.get("secret");
+    if (secret === null) throw new Error("missing enrollment secret");
+    expect([...fixture.redis.values.values()].join(";")).not.toContain(secret);
+    const timestep = Math.floor(1_800_000_000_000 / 30_000);
+    const validCode = totpForTimestep(secret, timestep);
+    const acceptedCodes = new Set([-1, 0, 1].map((offset) => totpForTimestep(secret, timestep + offset)));
+    let invalidCode = "000000";
+    while (acceptedCodes.has(invalidCode)) invalidCode = (Number(invalidCode) + 1).toString().padStart(6, "0");
+    const invalid = await request(fixture.app.server).post("/api/admin/auth/mfa")
+      .set("origin", "https://admin.example.invalid").set("cookie", cookiePair(passwordOnly))
+      .send({ code: invalidCode });
+    expect(invalid.status).toBe(401);
+    const enrolled = await request(fixture.app.server).post("/api/admin/auth/mfa")
+      .set("origin", "https://admin.example.invalid").set("cookie", cookiePair(passwordOnly))
+      .send({ code: validCode });
+    expect(enrolled.status).toBe(200);
+    const completed = MfaCompletionResponseSchema.parse(enrolled.body);
+    const recoveryCode = completed.data.recovery_codes?.[0];
+    const secondRecoveryCode = completed.data.recovery_codes?.[1];
+    const thirdRecoveryCode = completed.data.recovery_codes?.[2];
+    expect(recoveryCode).toBeDefined();
+    expect(secondRecoveryCode).toBeDefined();
+    expect(thirdRecoveryCode).toBeDefined();
+    expect(JSON.stringify(enrolled.body)).not.toContain(secret);
+    expect(fixture.getFactor()?.encryptedTotpSecret).not.toContain(secret);
+    expect(await verifyRecoveryCode(recoveryCode!, fixture.getFactor()!.recoveryCodeHashes[0]!)).toBe(true);
+    expect([...fixture.redis.values.values()].join(";")).not.toContain(recoveryCode);
+
+    const replayChallenge = await login(fixture.app);
+    const replay = await request(fixture.app.server).post("/api/admin/auth/mfa")
+      .set("origin", "https://admin.example.invalid").set("cookie", cookiePair(replayChallenge))
+      .send({ code: validCode });
+    expect(replay.status).toBe(401);
+
+    const recoveryChallenge = await login(fixture.app);
+    const recovered = await request(fixture.app.server).post("/api/admin/auth/mfa")
+      .set("origin", "https://admin.example.invalid").set("cookie", cookiePair(recoveryChallenge))
+      .send({ code: recoveryCode });
+    expect(recovered.status).toBe(200);
+    const reusedChallenge = await login(fixture.app);
+    const reused = await request(fixture.app.server).post("/api/admin/auth/mfa")
+      .set("origin", "https://admin.example.invalid").set("cookie", cookiePair(reusedChallenge))
+      .send({ code: recoveryCode });
+    expect(reused.status).toBe(401);
+
+    const concurrentChallenge = await login(fixture.app);
+    const concurrentCookie = cookiePair(concurrentChallenge);
+    const concurrent = await Promise.all([secondRecoveryCode!, thirdRecoveryCode!].map((code) =>
+      request(fixture.app.server).post("/api/admin/auth/mfa")
+        .set("origin", "https://admin.example.invalid").set("cookie", concurrentCookie)
+        .send({ code })
+    ));
+    expect(concurrent.map((response) => response.status).sort()).toEqual([200, 401]);
+    expect(JSON.stringify(fixture.auditEvents)).not.toContain(recoveryCode);
+    await fixture.app.close();
+  }, 15_000);
+
   it("logs in, sets the canonical hardened cookie and inspects only authorized memberships", async () => {
     const fixture = buildFixture();
     await fixture.app.ready();

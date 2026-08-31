@@ -32,6 +32,20 @@ const HttpUrlSchema = z.url().refine((value) => {
 }, { message: "must use the http or https protocol" });
 
 const EnvironmentBooleanSchema = z.enum(["true", "false"]).transform((value) => value === "true");
+const isAllZeroBytes = (value: Uint8Array): boolean => value.every((byte) => byte === 0);
+
+const MfaEncryptionKeySchema = z.string().transform((value, context): Uint8Array => {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    context.addIssue({ code: "custom", message: "must be a canonical base64url-encoded 32-byte key" });
+    return z.NEVER;
+  }
+  const bytes = Buffer.from(value, "base64url");
+  if (bytes.byteLength !== 32 || bytes.toString("base64url") !== value) {
+    context.addIssue({ code: "custom", message: "must be a canonical base64url-encoded 32-byte key" });
+    return z.NEVER;
+  }
+  return new Uint8Array(bytes);
+});
 
 const VerificationSigningKeysSchema = z.string().transform((value, context): Readonly<Record<string, Uint8Array>> => {
   let parsed: unknown;
@@ -146,7 +160,8 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   TEMPLATE_ASSET_MAX_BYTES: z.coerce.number().int().min(1_024).max(10 * 1_024 * 1_024).default(5 * 1_024 * 1_024),
   VERIFICATION_ACTIVE_KID: z.string().regex(/^[A-Za-z0-9._-]{1,128}$/).default("development-key"),
   VERIFICATION_SIGNING_KEYS_JSON: VerificationSigningKeysSchema,
-  ADMIN_MFA_POLICY: z.literal("DEFERRED_NON_PRODUCTION").default("DEFERRED_NON_PRODUCTION"),
+  ADMIN_MFA_POLICY: z.enum(["DEFERRED_NON_PRODUCTION", "REQUIRED"]).default("DEFERRED_NON_PRODUCTION"),
+  ADMIN_MFA_ENCRYPTION_KEY: MfaEncryptionKeySchema.optional(),
   ...ObjectStorageEnvironmentSchema.shape
 }).superRefine((environment, context) => {
   if (environment.SESSION_ABSOLUTE_TTL_SECONDS < environment.SESSION_IDLE_TTL_SECONDS) {
@@ -173,10 +188,26 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
         });
       }
     }
+    if (environment.ADMIN_MFA_POLICY !== "REQUIRED") {
+      context.addIssue({
+        code: "custom",
+        path: ["ADMIN_MFA_POLICY"],
+        message: "must be REQUIRED in production"
+      });
+    }
+    if (environment.ADMIN_MFA_ENCRYPTION_KEY !== undefined && isAllZeroBytes(environment.ADMIN_MFA_ENCRYPTION_KEY)) {
+      context.addIssue({
+        code: "custom",
+        path: ["ADMIN_MFA_ENCRYPTION_KEY"],
+        message: "must not use the documented development placeholder in production"
+      });
+    }
+  }
+  if (environment.ADMIN_MFA_POLICY === "REQUIRED" && environment.ADMIN_MFA_ENCRYPTION_KEY === undefined) {
     context.addIssue({
       code: "custom",
-      path: ["ADMIN_MFA_POLICY"],
-      message: "production admin authentication requires an approved MFA contract and implementation"
+      path: ["ADMIN_MFA_ENCRYPTION_KEY"],
+      message: "is required when admin MFA is required"
     });
   }
 });

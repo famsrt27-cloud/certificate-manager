@@ -21,6 +21,10 @@ export const LoginRequestSchema = z.object({
   password: z.string().min(1).refine((value) => utf8ByteLength(value) <= 72)
 }).strict();
 
+export const MfaCodeRequestSchema = z.object({
+  code: z.string().trim().refine((value) => /^\d{6}$/.test(value) || /^[A-Za-z0-9_-]{24}$/.test(value))
+}).strict();
+
 export const AuthenticatedUserSchema = z.object({
   id: z.uuid(),
   email: z.email()
@@ -47,6 +51,21 @@ export const AuthenticationResponseSchema = z.object({
   meta: z.object({ request_id: z.uuid() })
 });
 
+export const MfaPendingDataSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("MFA_REQUIRED") }),
+  z.object({ status: z.literal("MFA_ENROLLMENT_REQUIRED"), provisioning_uri: z.string().startsWith("otpauth://totp/") })
+]);
+
+export const LoginResponseSchema = z.object({
+  data: z.union([AuthenticationDataSchema, MfaPendingDataSchema]),
+  meta: z.object({ request_id: z.uuid() })
+});
+
+export const MfaCompletionResponseSchema = z.object({
+  data: AuthenticationDataSchema.extend({ recovery_codes: z.array(z.string().regex(/^[A-Za-z0-9_-]{24}$/)).length(10).optional() }),
+  meta: z.object({ request_id: z.uuid() })
+});
+
 export const LogoutResponseSchema = z.object({
   data: z.object({ logged_out: z.literal(true) }),
   meta: z.object({ request_id: z.uuid() })
@@ -55,4 +74,7 @@ export const LogoutResponseSchema = z.object({
 export type AuthenticationData = z.infer<typeof AuthenticationDataSchema>;
 export type AuthenticationResponse = z.infer<typeof AuthenticationResponseSchema>;
 export type LoginRequest = z.infer<typeof LoginRequestSchema>;
+export type LoginResponse = z.infer<typeof LoginResponseSchema>;
+export type MfaCodeRequest = z.infer<typeof MfaCodeRequestSchema>;
+export type MfaCompletionResponse = z.infer<typeof MfaCompletionResponseSchema>;
 export type LogoutResponse = z.infer<typeof LogoutResponseSchema>;

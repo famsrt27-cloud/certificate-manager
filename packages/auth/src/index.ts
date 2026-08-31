@@ -27,3 +27,18 @@ export {
   type SessionRedisStore,
   type SessionStoreOptions
 } from "./session-store.js";
+export {
+  MFA_TOTP_DIGITS,
+  MFA_TOTP_PERIOD_SECONDS,
+  MfaSecretCipher,
+  RedisMfaChallengeStore,
+  createTotpProvisioningUri,
+  findTotpTimestep,
+  generateRecoveryCodes,
+  generateTotpSecret,
+  hashRecoveryCode,
+  totpForTimestep,
+  verifyRecoveryCode,
+  type MfaRedisStore,
+  type PendingMfaChallenge
+} from "./mfa.js";

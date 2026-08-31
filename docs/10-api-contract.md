@@ -72,7 +72,7 @@ Both API endpoints use the canonical JSON envelope and a server-issued UUID `req
 
 ## Admin security
 
-- `/api/admin/auth/login` is the only unauthenticated admin route. It is origin-checked, rate-limited and protected against account enumeration. Every other `/api/admin/*` route requires authenticated server-side identity and authorization.
+- `/api/admin/auth/login` and `/api/admin/auth/mfa` are the only pre-session admin routes. Both are exact-origin checked, no-store, and use generic authentication failures; login retains distributed account/network throttling and the MFA challenge permits at most five attempts in five minutes. Every other `/api/admin/*` route requires authenticated server-side identity and authorization.
 - The active organization must be derived from an authorized organization membership. A client-supplied organization value cannot grant scope.
 - Each endpoint enforces the permissions in `docs/18-roles-permissions.md`.
 - Authentication uses the `__Host-admin_session` Secure/HttpOnly/SameSite=Lax cookie containing only an opaque Redis session ID.
@@ -99,7 +99,7 @@ Unauthenticated. Enforce allowed `Origin`, rate limiting and generic credential 
 }
 ```
 
-Response `200` rotates/creates the Redis session, sets the `__Host-admin_session` cookie and returns:
+With `ADMIN_MFA_POLICY=DEFERRED_NON_PRODUCTION`, response `200` rotates/creates the Redis session, sets the `__Host-admin_session` cookie and returns:
 
 ```json
 {
@@ -118,6 +118,14 @@ Response `200` rotates/creates the Redis session, sets the `__Host-admin_session
 ```
 
 The response uses `Cache-Control: no-store`. Generic invalid-credential responses do not reveal account existence or status.
+
+With `ADMIN_MFA_POLICY=REQUIRED`, password success does not create a session. It sets a five-minute `__Host-admin_mfa` Secure/HttpOnly/SameSite=Lax cookie and returns either `{ "status": "MFA_REQUIRED" }` or `{ "status": "MFA_ENROLLMENT_REQUIRED", "provisioning_uri": "otpauth://..." }`. The provisioning URI is disclosed only for first enrollment and responses remain `no-store`.
+
+### Complete MFA
+
+`POST /api/admin/auth/mfa`
+
+Pre-session route requiring the exact allowed `Origin` and MFA challenge cookie. The strict request is `{ "code": "123456" }` for TOTP or a 24-character recovery code. Successful verification deletes the challenge, creates the full admin session, expires the challenge cookie and returns the normal authentication response. First enrollment additionally returns ten `recovery_codes` exactly once. Invalid, expired, replayed, already-consumed and unknown factors share the generic authentication failure. Password, OTP, recovery codes, encryption keys, decrypted secrets and challenge identifiers are never logged or placed in audit metadata.
 
 Each active membership is serialized as:
 

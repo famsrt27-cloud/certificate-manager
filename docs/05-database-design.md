@@ -30,6 +30,13 @@ This document defines the current PostgreSQL 16 integrity rules. `docs/08-erd.md
 - `ORG_ADMIN`, `CERTIFICATE_MANAGER`, `TEMPLATE_MANAGER` and `VIEWER` are assigned through organization membership roles.
 - Role-to-permission mappings are explicit and seeded from reviewed data.
 
+## Admin MFA factors
+
+- Migration `202608310011_admin-mfa` adds one global `admin_mfa_factors` row per user, keyed by `user_id` with cascade deletion.
+- The TOTP secret column contains only the versioned AES-256-GCM ciphertext. Recovery codes are stored only as salted scrypt hashes in a bounded array.
+- `last_accepted_timestep` is advanced only by a conditional update requiring a strictly newer timestep. Recovery consumption removes the matched hash only when it is still present, so concurrent replay cannot succeed.
+- Enrollment inserts the factor once; an existing factor cannot be silently replaced through login.
+
 ## Public certificate identity
 
 `certificates.id` is an internal UUID. `certificates.public_identifier` is a separate globally unique, cryptographically random 128-bit value encoded as 32 lowercase hexadecimal characters.

@@ -81,7 +81,7 @@ describe("environment validation", () => {
     }
   });
 
-  it("keeps production HTTPS origins and MFA fail-closed", () => {
+  it("rejects deferred MFA in production", () => {
     try {
       loadApiEnvironment({
         ...infrastructure,
@@ -95,7 +95,7 @@ describe("environment validation", () => {
         expect.objectContaining({ path: "ADMIN_ALLOWED_ORIGINS", message: "must use HTTPS in production" }),
         expect.objectContaining({
           path: "ADMIN_MFA_POLICY",
-          message: "production admin authentication requires an approved MFA contract and implementation"
+          message: "must be REQUIRED in production"
         })
       ]));
     }
@@ -106,6 +106,33 @@ describe("environment validation", () => {
       ADMIN_ALLOWED_ORIGINS: "https://admin.example.invalid"
     })).toThrowError(expect.objectContaining({
       issues: [expect.objectContaining({ path: "ADMIN_MFA_POLICY" })]
+    }));
+  });
+
+  it("accepts production only with required MFA and a dedicated 32-byte encryption key", () => {
+    const environment = loadApiEnvironment({
+      ...infrastructure,
+      NODE_ENV: "production",
+      ADMIN_ALLOWED_ORIGINS: "https://admin.example.invalid",
+      ADMIN_MFA_POLICY: "REQUIRED",
+      ADMIN_MFA_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url")
+    });
+    expect(environment.ADMIN_MFA_POLICY).toBe("REQUIRED");
+    expect(environment.ADMIN_MFA_ENCRYPTION_KEY).toHaveLength(32);
+  });
+
+  it("rejects the documented MFA encryption placeholder in production", () => {
+    expect(() => loadApiEnvironment({
+      ...infrastructure,
+      NODE_ENV: "production",
+      ADMIN_ALLOWED_ORIGINS: "https://admin.example.invalid",
+      ADMIN_MFA_POLICY: "REQUIRED",
+      ADMIN_MFA_ENCRYPTION_KEY: Buffer.alloc(32).toString("base64url")
+    })).toThrow(expect.objectContaining({
+      issues: [expect.objectContaining({
+        path: "ADMIN_MFA_ENCRYPTION_KEY",
+        message: "must not use the documented development placeholder in production"
+      })]
     }));
   });
 

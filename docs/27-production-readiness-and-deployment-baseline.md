@@ -139,7 +139,8 @@ still select and review it explicitly where stated.
 | `TEMPLATE_ASSET_MAX_BYTES`, `CERTIFICATE_PDF_MAX_BYTES` | NON-SECRET CONFIG | Bounded resource limits; defaults 5 MiB and 10 MiB. |
 | `VERIFICATION_ACTIVE_KID` | NON-SECRET CONFIG | Key identifier, **not a secret**; must be a member of the configured key set. |
 | `VERIFICATION_SIGNING_KEYS_JSON` | GENERATED SECRET | Required map of `kid` to canonical base64url signing keys; contains secret key bytes. |
-| `ADMIN_MFA_POLICY` | NON-SECRET CONFIG | Currently only `DEFERRED_NON_PRODUCTION`; always blocks API production startup. |
+| `ADMIN_MFA_POLICY` | NON-SECRET CONFIG | `DEFERRED_NON_PRODUCTION` or `REQUIRED`; production requires `REQUIRED`. |
+| `ADMIN_MFA_ENCRYPTION_KEY` | SECRET | Canonical base64url 32-byte AES-256-GCM key; required only with `REQUIRED` and independent from session/signing keys. |
 
 The API also consumes every object-storage/import/BullMQ variable in section 5.3.
 
@@ -227,22 +228,20 @@ is part of Phase 8.1.
 | Active `kid` absent from trusted key set | API validation rejects startup when `VERIFICATION_ACTIVE_KID` is not an own key-set member. | Worker intentionally uses each certificate's immutable stored `kid`; all retained certificate keys must remain in its trusted set or affected generation fails safely. | READY (application contract) |
 | HTTP admin origin in production | API validation rejects every non-HTTPS `ADMIN_ALLOWED_ORIGINS` member. | Exact reverse-proxy origin and trusted-hop configuration are not implemented. | READY (configuration contract) |
 | HTTP public verification base URL in production | Worker validation rejects non-HTTPS `VERIFICATION_PUBLIC_BASE_URL`. | TLS/reverse proxy and public DNS are not implemented. | READY (configuration contract) |
-| Unresolved production MFA | API validation always adds an MFA error when `NODE_ENV=production`; HTTPS does not bypass it. | Approved MFA schema/API/ADR and implementation do not exist. Resolve only in Phase 8.2. | BLOCKED |
+| Production MFA | API validation rejects production unless policy is `REQUIRED` with a valid dedicated encryption key. | Deployment must provision and protect the key and apply migration `202608310011_admin-mfa`. | READY (application contract) |
 
 Evidence: `packages/config/src/environment.ts:7-190` and
 `packages/config/src/environment.test.ts:54-126`.
 
-## 8. Production MFA blocker
+## 8. Production MFA gate
 
-`ApiEnvironmentSchema` accepts only
-`ADMIN_MFA_POLICY=DEFERRED_NON_PRODUCTION`. Its production refinement always adds
-`production admin authentication requires an approved MFA contract and
-implementation`. The test suite proves both HTTP origins and otherwise-valid HTTPS
-origins fail production parsing (`packages/config/src/environment.test.ts:77-103`).
-
-This is an intentional **BLOCKER** for Phase 8.2. Phase 8.1 does not add a `REQUIRED`
-literal, invent a factor contract, honor an upstream MFA claim, remove the refinement,
-or otherwise weaken the gate.
+Phase 8.2 adds the approved application-owned TOTP contract. `ApiEnvironmentSchema`
+accepts `DEFERRED_NON_PRODUCTION` and `REQUIRED`, rejects the deferred policy in
+production, and requires a strict dedicated 32-byte encryption key whenever MFA is
+required. Password success creates no full session until enrollment or TOTP/recovery
+verification completes. Replay and one-time recovery consumption are enforced by
+atomic PostgreSQL updates. This resolves the application MFA blocker; deployment key
+provisioning, migration execution and operational evidence remain Phase 8 deployment work.
 
 ## 9. Container and Compose gap audit
 
@@ -343,7 +342,7 @@ Statuses are limited to `READY`, `PARTIAL`, `BLOCKED`, and `NOT_IMPLEMENTED`.
 
 | Requirement | Current state | Evidence | Production blocker? | Target Phase 8 part |
 | --- | --- | --- | --- | --- |
-| Production MFA | `BLOCKED`: API production parsing always rejects the deferred policy | `packages/config/src/environment.ts:142,159-173`; environment tests | Yes | 8.2 |
+| Production MFA | `READY (application contract)`: production requires TOTP MFA and a dedicated encryption key | config/auth/API/database focused tests and migration `202608310011_admin-mfa` | Yes | 8.2 complete |
 | TLS | `NOT_IMPLEMENTED`: HTTPS is required by config contracts but no termination exists | environment production refinements; `docs/20-deployment.md` | Yes | 8.3 |
 | Reverse proxy / trusted hops | `NOT_IMPLEMENTED`: no edge service; Fastify `trustProxy` remains unset | `compose.yaml`; `apps/api/src/app.ts`; `docs/16-threat-model.md` | Yes | 8.3 |
 | Public URL/origins | `PARTIAL`: exact/HTTPS validation exists; production DNS/origins are unselected | `packages/config/src/environment.ts:97-117,159-189` | Yes | 8.3 |

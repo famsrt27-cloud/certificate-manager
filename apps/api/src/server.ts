@@ -1,5 +1,6 @@
 import { loadApiEnvironment } from "@certificate-platform/config";
-import { LoginRateLimiter, PublicVerificationRateLimiter, RedisSessionStore, hashPassword } from "@certificate-platform/auth";
+import { LoginRateLimiter, MfaSecretCipher, PublicVerificationRateLimiter, RedisMfaChallengeStore,
+  RedisSessionStore, hashPassword } from "@certificate-platform/auth";
 import {
   checkDatabase,
   closeDatabase,
@@ -11,6 +12,10 @@ import {
   suggestPublicCertificateProjects,
   suggestPublicCertificateTrainings,
   findAuthenticationUser,
+  findAdminMfaFactor,
+  enrollAdminMfaFactor,
+  acceptAdminMfaTimestep,
+  consumeAdminMfaRecoveryHash,
   findPublicCertificateVerification,
   insertAuditRecord,
   loadEffectiveIdentity
@@ -75,11 +80,29 @@ const rateLimiter = new LoginRateLimiter(authRedis, {
   networkMaximum: environment.LOGIN_RATE_LIMIT_NETWORK_MAX
 });
 const dummyPasswordHash = await hashPassword("constant-dummy-authentication-password", environment.BCRYPT_COST);
+const mfaCipher = environment.ADMIN_MFA_ENCRYPTION_KEY === undefined
+  ? undefined
+  : new MfaSecretCipher(environment.ADMIN_MFA_ENCRYPTION_KEY);
+const mfaChallenges = environment.ADMIN_MFA_ENCRYPTION_KEY === undefined
+  ? undefined
+  : new RedisMfaChallengeStore(authRedis, environment.ADMIN_MFA_ENCRYPTION_KEY);
 const authenticationService = new AuthenticationService({
   sessions,
   rateLimiter,
   allowedOrigins: environment.ADMIN_ALLOWED_ORIGINS,
   dummyPasswordHash,
+  mfaPolicy: environment.ADMIN_MFA_POLICY,
+  ...(mfaCipher === undefined || mfaChallenges === undefined ? {} : {
+    mfaCipher,
+    mfaChallenges,
+    mfaFactors: {
+      find: (userId: string) => findAdminMfaFactor(database, userId),
+      enroll: (userId: string, secret: string, hashes: readonly string[], timestep: number) =>
+        enrollAdminMfaFactor(database, userId, secret, hashes, timestep),
+      acceptTimestep: (userId: string, timestep: number) => acceptAdminMfaTimestep(database, userId, timestep),
+      consumeRecoveryHash: (userId: string, hash: string) => consumeAdminMfaRecoveryHash(database, userId, hash)
+    }
+  }),
   identities: {
     findByNormalizedEmail: (email) => findAuthenticationUser(database, email),
     loadEffectiveIdentity: (userId) => loadEffectiveIdentity(database, userId)
