@@ -1,6 +1,6 @@
 export interface StructuredLoggerOptions {
   level: string;
-  base: null;
+  base: { service: string };
   redact: {
     paths: string[];
     censor: string;
@@ -22,6 +22,13 @@ const SENSITIVE_LOG_PATHS: string[] = [
   "req.headers.authorization",
   "req.headers.cookie",
   "req.headers.x-csrf-token",
+  "req.headers.x-forwarded-for",
+  "req.headers.x-forwarded-host",
+  "req.headers.x-forwarded-proto",
+  "req.headers.x-real-ip",
+  "req.headers.forwarded",
+  "req.remoteAddress",
+  "req.remotePort",
   "req.body.password",
   "req.body.csrf_token",
   "req.body.session_id",
@@ -32,6 +39,14 @@ const SENSITIVE_LOG_PATHS: string[] = [
   "request.headers.authorization",
   "request.headers.cookie",
   "request.headers.x-csrf-token",
+  "request.headers.x-forwarded-for",
+  "request.headers.x-forwarded-host",
+  "request.headers.x-forwarded-proto",
+  "request.headers.x-real-ip",
+  "request.headers.forwarded",
+  "request.remoteAddress",
+  "request.remotePort",
+  "request.ip",
   "request.body.password",
   "request.body.token",
   "request.body.download_token",
@@ -59,12 +74,14 @@ const SENSITIVE_LOG_PATHS: string[] = [
   "sessionId",
   "csrfToken",
   "storageKey",
-  "storage_key"
+  "storage_key",
+  "networkAddress",
+  "network_address"
 ];
 
-export const createStructuredLoggerOptions = (level: string): StructuredLoggerOptions => ({
+export const createStructuredLoggerOptions = (level: string, service = "unknown"): StructuredLoggerOptions => ({
   level,
-  base: null,
+  base: { service },
   redact: {
     paths: [...SENSITIVE_LOG_PATHS],
     censor: "[REDACTED]"

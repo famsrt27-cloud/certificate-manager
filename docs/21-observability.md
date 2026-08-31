@@ -63,3 +63,43 @@ Use request_id and, where supported, distributed tracing.
 Tracing baggage and span attributes must follow the same secret/PII redaction rules as logs.
 
 Public `search_result_token` values receive the same request-body, structured-log, trace and error-report redaction as verification and download tokens. Search criteria and returned recipient names are not added to metrics, tracing attributes or routine request logs.
+
+## Phase 8.3 private metrics surface
+
+API and worker each expose a small in-process Prometheus text endpoint at `/metrics`.
+It is reachable only on private deployment networks; the production Nginx edge returns
+404 for it. No monitoring vendor, public scrape endpoint, token-bearing label, or
+high-cardinality route value is introduced by this implementation. The collector must
+scrape the private API/worker endpoints with deployment-managed network controls.
+
+Implemented metric families are:
+
+- `certificate_platform_http_requests_total` and
+  `certificate_platform_http_request_duration_seconds`, labelled only with fixed
+  service, method, matched route pattern and status code;
+- `certificate_platform_public_verification_total` and
+  `certificate_platform_public_download_total`, labelled only by aggregate result;
+- `certificate_platform_rate_limit_events_total`, labelled by fixed login/public
+  verification/public download/public search scope;
+- `certificate_platform_dependency_failures_total` and
+  `certificate_platform_readiness_total`, labelled only by database/Redis and result;
+- worker generation queue depth, duration, failed/retried/stalled events and renderer
+  failure families;
+- object-storage failure and Redis-backed session failure counters.
+
+Route labels are derived from registered Fastify route patterns only; unmatched,
+query-bearing, malformed, or overlong input is grouped as `unmatched`. Labels never
+contain raw URLs, tokens, certificate identifiers, recipient/participant names, raw
+IP addresses, credentials, search criteria, storage keys, signing material, or queue
+payload contents. Counters reset on process restart; alerting and retention are a
+private collector/operations responsibility.
+
+API and worker disable framework default request logging and write a redacted JSON
+completion record with service identity, generated request ID, matched route, status,
+duration and stable HTTP error code where applicable. Nginx writes a separate JSON edge
+access record containing only method, status, duration, upstream status and the
+application-generated response request ID. Raw request paths and query strings,
+forwarded/client address fields, request bodies and tokens are not edge-log dimensions.
+Next.js is reached only through the edge; its canonical request outcome is therefore
+represented by the edge record, while API work is represented by API JSON logs and
+metrics.

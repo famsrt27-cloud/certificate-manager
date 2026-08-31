@@ -431,3 +431,97 @@ Phase 8.1 is complete when:
 
 Meeting these criteria means **Phase 8.1 is complete**. It does not mean the platform
 is ready for production and does not authorize Phase 8.2 work.
+
+## 16. Phase 8.3 implementation record
+
+This section supersedes only the Phase 8.3 gap statements above. It records repository
+implementation, not an external production deployment, certificate issuance, backup,
+restore drill, or rehearsal. PR Part 3 remains unchecked pending the required review
+and evidence gates; Parts 4 and 5 remain out of scope.
+
+### Runtime, topology and ingress
+
+- `Dockerfile` now has frozen-lockfile Node 24.19.0/pnpm 11.5.2 build stages, Next.js
+  standalone output, production dependency deployment for API/worker, non-root
+  runtime UID/GID 10001, and an explicit `migrate` target.
+- `compose.production.yaml` is a distinct production definition. It includes only
+  Nginx, web, API, worker and a one-shot tools-profile migration service. PostgreSQL,
+  Redis, and S3-compatible storage are externally provisioned private dependencies;
+  their production data/admin ports and any provider consoles are not in this Compose
+  definition.
+- Only Nginx publishes `80:8080` and `443:8443`. HTTP redirects to HTTPS. Nginx sends
+  all permitted paths to Next.js; the existing Next.js `/api/*` rewrite is the only
+  Fastify path. Nginx blocks public health, metrics and OpenAPI paths.
+- API attaches only to application and dependency networks; worker/migration attach
+  only to the dependency network; web attaches only to the application network. The
+  external dependency network name is operator-required. No Docker socket, privileged
+  container or host port is configured for internal services.
+- Nginx uses externally injected Docker TLS secrets, overwrites forwarded headers and
+  clears client request IDs. API production configuration requires exactly one trusted
+  proxy hop and continues to generate request IDs itself. The selected Nginx decision
+  is recorded in ADR-020.
+
+### Runtime hardening and migration boundary
+
+All long-running production services have a read-only filesystem, non-root user,
+`cap_drop: ALL`, `no-new-privileges`, bounded tmpfs, PID/CPU/memory limits, restart
+policy and graceful `SIGTERM`/`SIGINT` closure. Application processes have no runtime
+package manager or source workspace in their final image where practical. Web receives
+no data-service secrets; worker receives no API session/MFA secrets. The worker is
+resource-limited as a process, but its renderer remains in-process; no stronger
+renderer isolation is claimed.
+
+Migrations are not part of web/API/worker startup. The explicit tools-profile target
+runs `node-pg-migrate` with `--advisory-lock-mode fail`; migration lock contention is
+therefore an observable failure. The approved order is secret/config injection,
+private dependency verification, explicit compatible migration, successful migration
+observation, application rollout, and private readiness/metric verification. Applied
+historical migrations are never rolled back; image rollback requires backward schema
+compatibility or a forward corrective migration.
+
+### Fail-closed configuration and secrets
+
+Production parsing now rejects loopback/credentialless/non-TLS PostgreSQL,
+non-`rediss:`/unauthenticated Redis, HTTP object storage, automatic bucket creation,
+the default BullMQ namespace, documented local session/signing/MFA/storage
+placeholders, non-HTTPS admin/public origins, and any production MFA policy other than
+`REQUIRED`. PostgreSQL accepts `sslmode=require`, `verify-ca`, or `verify-full`; actual
+CA/DNS verification policy is provider-side operational evidence. Object-storage
+credentials must be a dedicated least-privilege application identity; bucket
+provisioning, privacy policy, server-side encryption/versioning and credentials
+rotation are deliberately operational responsibilities rather than fake application
+checks.
+
+### Health, logs and metrics
+
+API and worker distinguish dependency-free liveness from bounded dependency readiness.
+Readiness checks PostgreSQL and Redis only, return generic error data, avoid topology/
+credential/queue details, and feed private container health checks. Both services
+provide private `/metrics`; the edge blocks it. The implemented low-cardinality
+metrics cover HTTP count/latency/error outcomes, verification/download outcomes,
+rate-limit events, database/Redis readiness and failures, Redis session failures,
+generation queue depth/duration, failed/retried/stalled generation events, renderer
+failures and object-storage failures. API/worker request completion logs are structured
+JSON with service/request ID/route/status/duration/stable error code, and Nginx emits a
+sanitized JSON edge record. Sensitive data and PII listed in `docs/21-observability.md`
+remain redacted/excluded.
+
+### Operations and remaining blockers
+
+`docs/20-deployment.md` contains concise runbooks for elevated 5xx, database,
+Redis/session, queue, generation, storage, tampering and brute-force signals, together
+with safe diagnostic/recovery boundaries. It also describes production startup,
+migration, health, secret injection, private-only interfaces, logs/metrics and rollback
+limits.
+
+Phase 8.4 remains blocked on authorized backup/retention/versioning implementation and
+an isolated restore drill. Phase 8.5 remains blocked on a real production-like
+rehearsal: deployment-injected DNS/TLS/secrets/provider access, private smoke tests,
+migration/rollback exercise, alert routing/ownership, and restored-data verification.
+This Phase 8.3 code/documentation implementation does not claim those external
+operational controls have occurred.
+
+Evidence: `Dockerfile`, `compose.production.yaml`, `deploy/nginx/nginx.conf`,
+`packages/config/src/environment.ts`, `packages/config/src/metrics.ts`,
+`apps/api/src/app.ts`, `apps/worker/src/server.ts`, and focused configuration,
+health/metrics, storage, queue and Compose tests.

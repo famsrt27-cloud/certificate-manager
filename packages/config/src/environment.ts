@@ -34,6 +34,20 @@ const HttpUrlSchema = z.url().refine((value) => {
 const EnvironmentBooleanSchema = z.enum(["true", "false"]).transform((value) => value === "true");
 const isAllZeroBytes = (value: Uint8Array): boolean => value.every((byte) => byte === 0);
 
+const parseConfiguredUrl = (value: string): URL => new URL(value);
+const isLoopbackHost = (hostname: string): boolean => {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+};
+const hasRequiredAuthority = (url: URL): boolean => url.hostname.length > 0 && url.username.length > 0 && url.password.length > 0;
+const hasRequiredPassword = (url: URL): boolean => url.hostname.length > 0 && url.password.length > 0;
+const hasRequiredPostgresTls = (url: URL): boolean => {
+  const sslmode = url.searchParams.get("sslmode");
+  return sslmode === "require" || sslmode === "verify-ca" || sslmode === "verify-full";
+};
+const usesLocalDevelopmentCredential = (url: URL, password: string): boolean =>
+  url.password === password || decodeURIComponent(url.password) === password;
+
 const MfaEncryptionKeySchema = z.string().transform((value, context): Uint8Array => {
   if (!/^[A-Za-z0-9_-]{43}$/.test(value)) {
     context.addIssue({ code: "custom", message: "must be a canonical base64url-encoded 32-byte key" });
@@ -132,6 +146,7 @@ const AllowedOriginsSchema = z.string().min(1).default("http://localhost:3000").
 export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
   API_HOST: z.string().min(1).default("0.0.0.0"),
   API_PORT: PortSchema.default(3_001),
+  API_TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(1).default(0),
   ADMIN_ALLOWED_ORIGINS: AllowedOriginsSchema,
   SESSION_SECRET: z.string().refine((value) => Buffer.byteLength(value, "utf8") >= 32, {
     message: "must contain at least 32 UTF-8 bytes"
@@ -179,6 +194,9 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
     });
   }
   if (environment.NODE_ENV === "production") {
+    const databaseUrl = parseConfiguredUrl(environment.DATABASE_URL);
+    const redisUrl = parseConfiguredUrl(environment.REDIS_URL);
+    const objectStorageUrl = parseConfiguredUrl(environment.OBJECT_STORAGE_ENDPOINT);
     for (const origin of environment.ADMIN_ALLOWED_ORIGINS) {
       if (!origin.startsWith("https://")) {
         context.addIssue({
@@ -200,6 +218,85 @@ export const ApiEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
         code: "custom",
         path: ["ADMIN_MFA_ENCRYPTION_KEY"],
         message: "must not use the documented development placeholder in production"
+      });
+    }
+    if (environment.API_TRUST_PROXY_HOPS !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["API_TRUST_PROXY_HOPS"],
+        message: "must be exactly 1 in production behind the approved proxy topology"
+      });
+    }
+    if (!hasRequiredAuthority(databaseUrl) || databaseUrl.pathname === "/" || isLoopbackHost(databaseUrl.hostname)
+      || !hasRequiredPostgresTls(databaseUrl)) {
+      context.addIssue({
+        code: "custom",
+        path: ["DATABASE_URL"],
+        message: "must use a credentialed non-loopback PostgreSQL endpoint with sslmode=require, verify-ca, or verify-full in production"
+      });
+    }
+    if (redisUrl.protocol !== "rediss:" || !hasRequiredPassword(redisUrl) || isLoopbackHost(redisUrl.hostname)) {
+      context.addIssue({
+        code: "custom",
+        path: ["REDIS_URL"],
+        message: "must use a credentialed non-loopback rediss endpoint in production"
+      });
+    }
+    if (objectStorageUrl.protocol !== "https:") {
+      context.addIssue({
+        code: "custom",
+        path: ["OBJECT_STORAGE_ENDPOINT"],
+        message: "must use HTTPS in production"
+      });
+    }
+    if (environment.OBJECT_STORAGE_CREATE_BUCKET) {
+      context.addIssue({
+        code: "custom",
+        path: ["OBJECT_STORAGE_CREATE_BUCKET"],
+        message: "must be false in production; provision the private bucket out of band"
+      });
+    }
+    if (environment.BULLMQ_PREFIX === "certificate-platform") {
+      context.addIssue({
+        code: "custom",
+        path: ["BULLMQ_PREFIX"],
+        message: "must use an environment-specific namespace in production"
+      });
+    }
+    if (environment.SESSION_SECRET === "local-session-secret-change-me-at-least-32-bytes") {
+      context.addIssue({
+        code: "custom",
+        path: ["SESSION_SECRET"],
+        message: "must not use the documented development placeholder in production"
+      });
+    }
+    if (usesLocalDevelopmentCredential(databaseUrl, "local-postgres-change-me")) {
+      context.addIssue({
+        code: "custom",
+        path: ["DATABASE_URL"],
+        message: "must not use the documented development credential in production"
+      });
+    }
+    if (usesLocalDevelopmentCredential(redisUrl, "local-redis-change-me")) {
+      context.addIssue({
+        code: "custom",
+        path: ["REDIS_URL"],
+        message: "must not use the documented development credential in production"
+      });
+    }
+    if (environment.OBJECT_STORAGE_ACCESS_KEY === "local-minio-admin"
+      || environment.OBJECT_STORAGE_SECRET_KEY === "local-minio-change-me") {
+      context.addIssue({
+        code: "custom",
+        path: ["OBJECT_STORAGE_ACCESS_KEY"],
+        message: "must not use documented local MinIO administrator credentials in production"
+      });
+    }
+    if (Object.values(environment.VERIFICATION_SIGNING_KEYS_JSON).some(isAllZeroBytes)) {
+      context.addIssue({
+        code: "custom",
+        path: ["VERIFICATION_SIGNING_KEYS_JSON"],
+        message: "must not use the documented development signing-key placeholder in production"
       });
     }
   }
@@ -225,6 +322,72 @@ export const WorkerEnvironmentSchema = InfrastructureEnvironmentSchema.extend({
 }).superRefine((environment, context) => {
   if (environment.NODE_ENV === "production" && !environment.VERIFICATION_PUBLIC_BASE_URL.startsWith("https://")) {
     context.addIssue({ code: "custom", path: ["VERIFICATION_PUBLIC_BASE_URL"], message: "must use HTTPS in production" });
+  }
+  if (environment.NODE_ENV === "production") {
+    const databaseUrl = parseConfiguredUrl(environment.DATABASE_URL);
+    const redisUrl = parseConfiguredUrl(environment.REDIS_URL);
+    const objectStorageUrl = parseConfiguredUrl(environment.OBJECT_STORAGE_ENDPOINT);
+    if (!hasRequiredAuthority(databaseUrl) || databaseUrl.pathname === "/" || isLoopbackHost(databaseUrl.hostname)
+      || !hasRequiredPostgresTls(databaseUrl)) {
+      context.addIssue({
+        code: "custom",
+        path: ["DATABASE_URL"],
+        message: "must use a credentialed non-loopback PostgreSQL endpoint with sslmode=require, verify-ca, or verify-full in production"
+      });
+    }
+    if (redisUrl.protocol !== "rediss:" || !hasRequiredPassword(redisUrl) || isLoopbackHost(redisUrl.hostname)) {
+      context.addIssue({
+        code: "custom",
+        path: ["REDIS_URL"],
+        message: "must use a credentialed non-loopback rediss endpoint in production"
+      });
+    }
+    if (objectStorageUrl.protocol !== "https:") {
+      context.addIssue({ code: "custom", path: ["OBJECT_STORAGE_ENDPOINT"], message: "must use HTTPS in production" });
+    }
+    if (environment.OBJECT_STORAGE_CREATE_BUCKET) {
+      context.addIssue({
+        code: "custom",
+        path: ["OBJECT_STORAGE_CREATE_BUCKET"],
+        message: "must be false in production; provision the private bucket out of band"
+      });
+    }
+    if (environment.BULLMQ_PREFIX === "certificate-platform") {
+      context.addIssue({
+        code: "custom",
+        path: ["BULLMQ_PREFIX"],
+        message: "must use an environment-specific namespace in production"
+      });
+    }
+    if (usesLocalDevelopmentCredential(databaseUrl, "local-postgres-change-me")) {
+      context.addIssue({
+        code: "custom",
+        path: ["DATABASE_URL"],
+        message: "must not use the documented development credential in production"
+      });
+    }
+    if (usesLocalDevelopmentCredential(redisUrl, "local-redis-change-me")) {
+      context.addIssue({
+        code: "custom",
+        path: ["REDIS_URL"],
+        message: "must not use the documented development credential in production"
+      });
+    }
+    if (environment.OBJECT_STORAGE_ACCESS_KEY === "local-minio-admin"
+      || environment.OBJECT_STORAGE_SECRET_KEY === "local-minio-change-me") {
+      context.addIssue({
+        code: "custom",
+        path: ["OBJECT_STORAGE_ACCESS_KEY"],
+        message: "must not use documented local MinIO administrator credentials in production"
+      });
+    }
+    if (Object.values(environment.VERIFICATION_SIGNING_KEYS_JSON).some(isAllZeroBytes)) {
+      context.addIssue({
+        code: "custom",
+        path: ["VERIFICATION_SIGNING_KEYS_JSON"],
+        message: "must not use the documented development signing-key placeholder in production"
+      });
+    }
   }
 });
 

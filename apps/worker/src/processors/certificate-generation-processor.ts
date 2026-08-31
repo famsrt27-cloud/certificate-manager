@@ -36,6 +36,7 @@ export interface CertificateGenerationProcessorOptions {
   readonly cleanupDelayMs?: number;
   readonly now?: () => Date;
   readonly render?: typeof renderCertificatePdf;
+  readonly onRendererFailure?: () => void;
   readonly publish?: (database: DatabaseClient, input: PublishCertificateGenerationInput) => Promise<"PUBLISHED" | "ALREADY_PUBLISHED">;
 }
 
@@ -61,6 +62,7 @@ export class CertificateGenerationProcessor {
   readonly #cleanupDelayMs: number;
   readonly #now: () => Date;
   readonly #render: typeof renderCertificatePdf;
+  readonly #onRendererFailure: () => void;
   readonly #publish: NonNullable<CertificateGenerationProcessorOptions["publish"]>;
 
   constructor(options: CertificateGenerationProcessorOptions) {
@@ -78,6 +80,7 @@ export class CertificateGenerationProcessor {
     this.#cleanupDelayMs = options.cleanupDelayMs ?? 60 * 60_000;
     this.#now = options.now ?? (() => new Date());
     this.#render = options.render ?? renderCertificatePdf;
+    this.#onRendererFailure = options.onRendererFailure ?? (() => undefined);
     this.#publish = options.publish ?? publishCertificateGeneration;
   }
 
@@ -168,10 +171,17 @@ export class CertificateGenerationProcessor {
       },
       assets: renderAssets
     };
-    const pdf = await this.#render(renderInput, { maxTotalAssetBytes: this.#maximumAssetBytes, maxPdfBytes: this.#maximumPdfBytes });
+    let pdf: Uint8Array;
+    try {
+      pdf = await this.#render(renderInput, { maxTotalAssetBytes: this.#maximumAssetBytes, maxPdfBytes: this.#maximumPdfBytes });
+    } catch (error) {
+      this.#onRendererFailure();
+      throw error;
+    }
     const pdfBytes = new Uint8Array(pdf);
     if (pdfBytes.byteLength <= 0 || pdfBytes.byteLength > this.#maximumPdfBytes
       || Buffer.from(pdfBytes.subarray(0, 5)).toString("ascii") !== "%PDF-") {
+      this.#onRendererFailure();
       throw new CertificateGenerationExecutionError(CERTIFICATE_GENERATION_ERROR_CODES.processingFailed);
     }
     const contentSha256 = createHash("sha256").update(pdfBytes).digest();

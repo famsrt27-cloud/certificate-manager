@@ -103,3 +103,11 @@ Required suites include:
 A phase is not complete while its critical security or data-integrity tests are failing.
 
 The Phase 6 completion gate provisions PostgreSQL, Redis and local S3-compatible private storage in CI. Its canonical secure-download integration path is not optional in CI and proves verification, download authorization, private-object redemption, revocation blocking and corrupt-object rejection.
+
+Phase 8.3 adds focused unit/HTTP/Compose coverage for production transport validation,
+non-placeholder configuration, private metrics/health behavior, generated structured
+request logging, queue telemetry and production Compose rendering. Production image
+builds, Nginx configuration validation and a private start/readiness smoke test are
+required where Docker/secret-injection facilities are available; they do not replace
+the Phase 8.5 production rehearsal. Do not run broad E2E suites solely for a
+container/configuration edit unless a focused failure warrants it.

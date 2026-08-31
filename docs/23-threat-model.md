@@ -133,3 +133,14 @@ Mitigation:
 - versioned Zod-validated queue payloads
 - durable idempotency constraints and safe redelivery
 - separate Redis namespaces for sessions, rate limits and queue data
+
+### T19 Production ingress or observability exposure
+Mitigation:
+- only the Nginx TLS edge publishes host ports in production Compose
+- web, API, worker, migrations and private dependencies use least-privilege private
+  networks; health and metrics are blocked at the public edge
+- Nginx overwrites forwarded headers and Fastify trusts exactly one internal hop
+- structured logs and metrics use generated request IDs, stable route patterns and
+  aggregate fixed labels; tokens, raw IPs, search criteria, credentials and PII are
+  excluded
+- deployment-injected TLS and secret material is never baked into images

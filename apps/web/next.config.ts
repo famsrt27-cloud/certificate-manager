@@ -1,5 +1,8 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 
+const webDirectory = dirname(fileURLToPath(import.meta.url));
 const apiInternalBaseUrl = process.env.API_INTERNAL_BASE_URL ?? "http://127.0.0.1:3001";
 const parsedApiUrl = new URL(apiInternalBaseUrl);
 if (
@@ -13,6 +16,8 @@ if (
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
+  output: "standalone",
+  outputFileTracingRoot: resolve(webDirectory, "../.."),
   poweredByHeader: false,
   reactStrictMode: true,
   headers: () => [{

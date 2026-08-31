@@ -47,4 +47,14 @@ describe("private S3-compatible storage", () => {
 
     await expect(storage.get("private-key", 6)).resolves.toEqual(Buffer.from("abcdef"));
   });
+
+  it("reports aggregate storage failures without exposing the object key", async () => {
+    const observer = { onFailure: vi.fn() };
+    const storage = createPrivateObjectStorage({ send: vi.fn().mockRejectedValue(new Error("private key detail")) } as never,
+      "private-imports", observer);
+
+    await expect(storage.get("private-key-must-not-be-reported", 6)).rejects.toThrow("private key detail");
+    expect(observer.onFailure).toHaveBeenCalledOnce();
+    expect(JSON.stringify(observer.onFailure.mock.calls)).not.toContain("private-key-must-not-be-reported");
+  });
 });

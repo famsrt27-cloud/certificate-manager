@@ -1,4 +1,4 @@
-import { loadWorkerEnvironment } from "@certificate-platform/config";
+import { createOperationalMetrics, loadWorkerEnvironment } from "@certificate-platform/config";
 import { checkDatabase, cleanupExpiredParticipantImports, closeDatabase, createDatabase } from "@certificate-platform/database";
 import {
   checkRedis,
@@ -6,6 +6,7 @@ import {
   connectRedis,
   createBullMqRedisConnection,
   createCertificateGenerationProducer,
+  createCertificateGenerationQueueInspector,
   createCertificateGenerationWorker,
   createParticipantImportProducer,
   createParticipantImportWorker,
@@ -21,6 +22,7 @@ import { QueueOutboxDispatcher } from "./queue-outbox-dispatcher.js";
 import { StorageCleanupReconciler } from "./storage-cleanup-reconciler.js";
 
 const environment = loadWorkerEnvironment();
+const metrics = createOperationalMetrics("worker");
 const database = createDatabase({
   connectionString: environment.DATABASE_URL,
   maxConnections: environment.DATABASE_MAX_CONNECTIONS
@@ -51,8 +53,12 @@ const s3 = createS3Client({
   secretAccessKey: environment.OBJECT_STORAGE_SECRET_KEY,
   forcePathStyle: environment.OBJECT_STORAGE_FORCE_PATH_STYLE
 });
-await ensurePrivateBucket(s3, environment.OBJECT_STORAGE_BUCKET, environment.OBJECT_STORAGE_CREATE_BUCKET);
-const storage = createPrivateObjectStorage(s3, environment.OBJECT_STORAGE_BUCKET);
+await ensurePrivateBucket(s3, environment.OBJECT_STORAGE_BUCKET, environment.OBJECT_STORAGE_CREATE_BUCKET, {
+  onFailure: () => metrics.recordObjectStorageFailure()
+});
+const storage = createPrivateObjectStorage(s3, environment.OBJECT_STORAGE_BUCKET, {
+  onFailure: () => metrics.recordObjectStorageFailure()
+});
 const participantImportProcessor = new ParticipantImportProcessor({
   database,
   storage,
@@ -73,15 +79,34 @@ const certificateGenerationProcessor = new CertificateGenerationProcessor({
   verificationBaseUrl: environment.VERIFICATION_PUBLIC_BASE_URL,
   verificationKeys: new Map(Object.entries(environment.VERIFICATION_SIGNING_KEYS_JSON)),
   maximumAssetBytes: environment.CERTIFICATE_RENDER_MAX_ASSET_BYTES,
-  maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES
+  maximumPdfBytes: environment.CERTIFICATE_PDF_MAX_BYTES,
+  onRendererFailure: () => metrics.recordRendererFailure()
 });
 const certificateGenerationWorker = createCertificateGenerationWorker({
   connection: certificateQueueRedis,
   prefix: environment.BULLMQ_PREFIX,
   concurrency: environment.CERTIFICATE_GENERATION_CONCURRENCY,
-  process: (payload) => certificateGenerationProcessor.process(payload),
-  onFinalFailure: (payload) => certificateGenerationProcessor.handleFinalFailure(payload)
+  process: async (payload) => {
+    const startedAt = performance.now();
+    try {
+      await certificateGenerationProcessor.process(payload);
+      metrics.recordGenerationDuration("success", performance.now() - startedAt);
+    } catch (error) {
+      metrics.recordGenerationDuration("failure", performance.now() - startedAt);
+      throw error;
+    }
+  },
+  onFinalFailure: (payload) => certificateGenerationProcessor.handleFinalFailure(payload),
+  telemetry: {
+    onFailed: () => metrics.recordGenerationEvent("failed"),
+    onRetried: () => metrics.recordGenerationEvent("retried"),
+    onStalled: () => metrics.recordGenerationEvent("stalled")
+  }
 });
+const certificateGenerationQueueInspector = createCertificateGenerationQueueInspector(
+  certificateQueueRedis,
+  environment.BULLMQ_PREFIX
+);
 const participantImports = createParticipantImportProducer(dispatcherRedis, environment.BULLMQ_PREFIX);
 const certificateGenerations = createCertificateGenerationProducer(dispatcherRedis, environment.BULLMQ_PREFIX);
 const queueOutboxDispatcher = new QueueOutboxDispatcher({
@@ -118,8 +143,32 @@ const app = buildWorkerHealthApp({
     checkRedis: () => checkRedis(redis)
   },
   readinessTimeoutMs: environment.READINESS_TIMEOUT_MS,
-  logLevel: environment.LOG_LEVEL
+  logLevel: environment.LOG_LEVEL,
+  metrics
 });
+
+let generationQueueMetricsPromise: Promise<void> | null = null;
+const refreshGenerationQueueMetrics = (): Promise<void> => {
+  if (generationQueueMetricsPromise !== null) return generationQueueMetricsPromise;
+  const run = certificateGenerationQueueInspector.getDepth()
+    .then((depth) => {
+      metrics.setGenerationQueueDepth("active", depth.active);
+      metrics.setGenerationQueueDepth("delayed", depth.delayed);
+      metrics.setGenerationQueueDepth("waiting", depth.waiting);
+    })
+    .catch((error: unknown) => {
+      metrics.recordDependencyFailure("redis");
+      app.log.warn({ err: error, error_code: "QUEUE_METRICS_UNAVAILABLE" }, "generation queue metrics refresh failed");
+    })
+    .finally(() => {
+      generationQueueMetricsPromise = null;
+    });
+  generationQueueMetricsPromise = run;
+  return run;
+};
+await refreshGenerationQueueMetrics();
+const generationQueueMetricsTimer = setInterval(() => void refreshGenerationQueueMetrics(), 10_000);
+generationQueueMetricsTimer.unref();
 
 let dispatchPromise: Promise<void> | null = null;
 const dispatchOutbox = (): Promise<void> => {
@@ -127,11 +176,12 @@ const dispatchOutbox = (): Promise<void> => {
   const run = queueOutboxDispatcher.dispatchOnce()
     .then((result) => {
       if (result.failed > 0) {
-        app.log.warn({ result }, "queue outbox dispatch completed with failures");
+        app.log.warn({ claimed: result.claimed, dispatched: result.dispatched, failed: result.failed,
+          error_code: "QUEUE_DISPATCH_FAILED" }, "queue outbox dispatch completed with failures");
       }
     })
     .catch((error: unknown) => {
-      app.log.warn({ err: error }, "queue outbox dispatch failed");
+      app.log.warn({ err: error, error_code: "QUEUE_DISPATCH_FAILED" }, "queue outbox dispatch failed");
     })
     .finally(() => {
       dispatchPromise = null;
@@ -148,10 +198,11 @@ const reconcileStorageCleanup = (): Promise<void> => {
   if (storageCleanupPromise !== null) return storageCleanupPromise;
   const run = storageCleanupReconciler.runOnce()
     .then((result) => {
-      if (result.failed > 0) app.log.warn({ result }, "storage cleanup reconciliation completed with failures");
+      if (result.failed > 0) app.log.warn({ claimed: result.claimed, deleted: result.deleted, protected: result.protected,
+        failed: result.failed, error_code: "STORAGE_DELETE_FAILED" }, "storage cleanup reconciliation completed with failures");
     })
     .catch((error: unknown) => {
-      app.log.warn({ err: error }, "storage cleanup reconciliation failed");
+      app.log.warn({ err: error, error_code: "STORAGE_CLEANUP_RECONCILIATION_FAILED" }, "storage cleanup reconciliation failed");
     })
     .finally(() => {
       storageCleanupPromise = null;
@@ -169,11 +220,12 @@ const reconcileParticipantImportSourceCleanup = (): Promise<void> => {
   const run = participantImportSourceCleanupReconciler.runOnce()
     .then((result) => {
       if (result.failed > 0) {
-        app.log.warn({ result }, "participant import source cleanup completed with failures");
+        app.log.warn({ claimed: result.claimed, deleted: result.deleted, failed: result.failed,
+          error_code: "IMPORT_SOURCE_DELETE_FAILED" }, "participant import source cleanup completed with failures");
       }
     })
     .catch((error: unknown) => {
-      app.log.warn({ err: error }, "participant import source cleanup reconciliation failed");
+      app.log.warn({ err: error, error_code: "IMPORT_SOURCE_CLEANUP_RECONCILIATION_FAILED" }, "participant import source cleanup reconciliation failed");
     })
     .finally(() => {
       participantImportSourceCleanupPromise = null;
@@ -193,18 +245,21 @@ const shutdown = async (signal: string): Promise<void> => {
   if (stopping) return;
   stopping = true;
   clearInterval(participantImportCleanupTimer);
+  clearInterval(generationQueueMetricsTimer);
   clearInterval(queueOutboxDispatchTimer);
   clearInterval(storageCleanupTimer);
   clearInterval(participantImportSourceCleanupTimer);
 
   app.log.info({ signal }, "shutting down");
   await app.close();
+  if (generationQueueMetricsPromise !== null) await generationQueueMetricsPromise;
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
   if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
   await Promise.allSettled([
     participantImportWorker.close(),
     certificateGenerationWorker.close(),
+    certificateGenerationQueueInspector.close(),
     participantImports.close(),
     certificateGenerations.close()
   ]);
@@ -225,15 +280,19 @@ try {
   await app.listen({ host: environment.WORKER_HOST, port: environment.WORKER_HEALTH_PORT });
 } catch (error) {
   app.log.fatal({ err: error }, "worker startup failed");
+  clearInterval(participantImportCleanupTimer);
   clearInterval(queueOutboxDispatchTimer);
+  clearInterval(generationQueueMetricsTimer);
   clearInterval(storageCleanupTimer);
   clearInterval(participantImportSourceCleanupTimer);
+  if (generationQueueMetricsPromise !== null) await generationQueueMetricsPromise;
   if (dispatchPromise !== null) await dispatchPromise;
   if (storageCleanupPromise !== null) await storageCleanupPromise;
   if (participantImportSourceCleanupPromise !== null) await participantImportSourceCleanupPromise;
   await Promise.allSettled([
     participantImportWorker.close(),
     certificateGenerationWorker.close(),
+    certificateGenerationQueueInspector.close(),
     participantImports.close(),
     certificateGenerations.close()
   ]);

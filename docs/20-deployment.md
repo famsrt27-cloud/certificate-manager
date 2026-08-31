@@ -49,7 +49,13 @@ Service responsibilities:
 
 Compose definitions use health checks and dependency readiness; container start order alone is not readiness. API/worker failures must not cause migrations to run concurrently without an explicit migration lock/command.
 
-The PDF renderer runs in an isolated worker boundary with outbound network disabled by default, a read-only application filesystem, a dedicated temporary directory and explicit CPU/memory/time limits. It may load only validated template definitions, approved private assets and bundled fonts.
+The certificate renderer has a capability-minimized package boundary: it receives only
+validated immutable rendering data, a prepared verification URL and approved asset
+bytes. It currently runs in the trusted worker process. Production container controls
+limit the worker as a whole, but do **not** claim independent renderer process or
+network isolation; an in-process renderer compromise can still use the worker's
+process privileges. It may load only validated template definitions, approved private
+assets and bundled fonts.
 
 ## Environment separation
 
@@ -102,3 +108,109 @@ Restores must preserve certificate-to-template-version links, immutable template
 - Set `Referrer-Policy: no-referrer` on the public verification page.
 - Do not put token values in paths or query strings.
 - Preserve the application-issued request ID without trusting a client value as identity.
+
+## Phase 8.3 production Compose deployment
+
+`compose.production.yaml` is intentionally separate from local `compose.yaml`. It
+does not define PostgreSQL, Redis, or object storage. Production operators provision
+those private dependencies and attach them through the required external
+`PRODUCTION_DEPENDENCY_NETWORK`; this prevents inherited development ports, MinIO
+root credentials, local transport, named volumes, and automatic bucket creation.
+
+```text
+Internet
+  -> nginx TLS edge (ports 80 redirect and 443 HTTPS only)
+  -> Next.js web (private application network)
+  -> same-site /api/* Next.js rewrite
+  -> Fastify API (private application + dependency networks)
+
+worker and explicit migrate tool -> private dependency network only
+dependency network -> externally provisioned PostgreSQL, Redis and private S3 storage
+```
+
+Nginx is the selected small ingress component. It is limited to TLS termination,
+HTTP-to-HTTPS redirect, security response headers, and a single upstream route to
+Next.js. Next.js remains the only route to Fastify through its existing same-site
+`/api/*` rewrite. The edge blocks public `/health/*`, `/metrics`, and `/openapi.json`.
+It overwrites forwarded headers, clears client-supplied request IDs, and Fastify trusts
+exactly one private proxy hop (`API_TRUST_PROXY_HOPS=1`); Fastify continues to generate
+the canonical request ID.
+
+TLS certificate and private-key Docker secrets are external deployment-injected
+objects. DNS names, certificates, private keys, firewall rules, provider CA bundles,
+and the secret-store implementation are operational inputs and are not committed.
+
+All application runtime services use the pinned Node 24.19.0 Alpine image, frozen
+pnpm 11.5.2 installation, explicit commands, a dedicated UID/GID 10001, read-only
+root filesystem, capability drop, `no-new-privileges`, bounded tmpfs, PID/CPU/memory
+limits, and restart policy. The proxy has the equivalent controls with its non-root
+Nginx user. No service uses a privileged container or Docker socket. API has only the
+application/dependency networks; worker has only the dependency network; web has no
+data-service credentials. The migration tool has only the database URL and runs only
+under the `tools` profile.
+
+### Configuration and secrets
+
+Production application parsing fails closed for the controls it can verify:
+
+- PostgreSQL must be non-loopback, credentialed, name a database, and use
+  `sslmode=require`, `verify-ca`, or `verify-full`.
+- Redis must be non-loopback, authenticated `rediss:`; each production environment
+  requires a non-default BullMQ prefix.
+- Object storage must use HTTPS, use an application least-privilege identity rather
+  than documented local/admin credentials, and set `OBJECT_STORAGE_CREATE_BUCKET=false`.
+- API configuration requires exact HTTPS admin origins, `ADMIN_MFA_POLICY=REQUIRED`, a
+  valid non-placeholder MFA encryption key, a non-placeholder session secret, and
+  non-placeholder verification signing keys.
+- Worker configuration requires its own HTTPS public verification origin and its
+  retained verification signing keys, but receives no API session or MFA secret.
+
+Provider-side authorization scope, private bucket policy, server-side encryption,
+versioning, certificate-chain verification, DNS ownership, ingress firewalling, and
+credential rotation cannot be proven by process configuration alone. Operators must
+enforce and evidence those controls before deployment. `OBJECT_STORAGE_CREATE_BUCKET`
+never provisions a production bucket.
+
+### Migration and rollout boundary
+
+Migrations are an explicit, observable one-shot command:
+
+```powershell
+docker compose --env-file <managed-injected-env-file> -f compose.production.yaml --profile tools run --rm migrate
+```
+
+The migration target calls `node-pg-migrate` with `--advisory-lock-mode fail`. A held
+lock is visible as a failed operator command; normal API, web and worker startup never
+runs migrations. Before a release, deploy the compatible migration, observe a zero
+exit status and migration log, then start or roll the application images and verify
+private readiness. Roll back application images/configuration only while the completed
+schema migration is backward compatible. Never roll back or edit an applied historical
+migration; an incompatible schema requires a forward corrective migration. Backup and
+restore evidence remains Phase 8.4.
+
+### Private health and metrics
+
+API and worker `/health/live` are process liveness only. `/health/ready` runs bounded
+PostgreSQL and Redis checks and returns a generic status without credentials, topology,
+database detail, queue contents, or stack traces. Their container health checks use
+the private readiness endpoints. `/metrics` is a private Prometheus text endpoint on
+the same private networks and is explicitly blocked at Nginx; an operator collector
+must be attached privately. No public metrics, health, or worker/operator port exists.
+
+### Operator runbooks
+
+Use request IDs and aggregate metrics/logs; never paste tokens, cookies, CSRF values,
+MFA data, credentials, recipient names, request bodies, or object keys into tickets or
+chat. Access logs and metrics only through the private operations path.
+
+| Incident | Observable signal | First diagnostic action | Safe recovery / escalation |
+| --- | --- | --- | --- |
+| Elevated 5xx | edge/API 5xx rate and `certificate_platform_http_requests_total` | Filter structured API logs by stable `error_code` and request ID; check private `/health/ready`. | Halt rollout if correlated with a new image/config; scale or roll back only within the schema compatibility boundary; escalate with redacted request IDs. |
+| DB connectivity | readiness failure or `certificate_platform_dependency_failures_total{dependency="database"}` | Check provider status, connection pool saturation and the injected DB URL/TLS material without displaying credentials. | Restore private DB connectivity; keep API unready, do not bypass TLS or change schema history. |
+| Redis/session failure | readiness failure, session 503s, or `certificate_platform_redis_session_failures_total` | Check Redis TLS/auth availability and evictions privately; expect no session identifiers in logs. | Repair Redis; communicate possible login loss only after approval; never disable CSRF/session checks. |
+| Queue backlog | `certificate_platform_generation_queue_depth` rising by state | Check worker readiness, queue metrics refresh warnings and PostgreSQL job/outbox state without inspecting payload PII. | Add bounded worker capacity or pause new generation according to incident command; preserve the BullMQ prefix and durable job state. |
+| Stalled/retried/failed jobs | `certificate_platform_generation_job_events_total` | Filter worker logs by stable error code and job aggregate counts, not queue payload. | Let bounded retry/reconciliation run; investigate terminal items using authorized admin tooling and create a reviewed recovery action. |
+| Certificate generation failures | generation failure/duration metrics or renderer failures | Check `certificate_platform_renderer_failures_total`, worker resources and sanitized renderer error codes. | Stop unsafe rollout, preserve immutable issuance/template inputs, and escalate; do not claim the renderer is separately sandboxed. |
+| Object-storage failure | `certificate_platform_object_storage_failures_total` or startup bucket failure | Check private provider health, least-privilege policy and bucket existence without exposing access keys/object keys. | Repair private storage policy/connectivity; do not enable automatic bucket creation or public access. |
+| Repeated token tampering | verification/download failures rising without corresponding success | Review aggregate result metrics and redacted public-route logs; never retain submitted token values. | Tighten incident/WAF observation under change control and assess signing-key compromise separately; preserve generic public responses. |
+| Auth brute-force/rate-limit spike | `certificate_platform_rate_limit_events_total{scope="login"}` | Correlate aggregate rate-limit counts and audit categories; do not collect raw IPs or emails. | Keep throttles enabled, use approved edge controls, and escalate suspected account attack without weakening generic failures. |

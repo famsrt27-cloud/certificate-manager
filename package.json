@@ -24,6 +24,7 @@
     "dev:bootstrap-admin": "pnpm --filter @certificate-platform/auth build && pnpm --filter @certificate-platform/contracts build && pnpm --filter @certificate-platform/database build && node --env-file-if-exists=.env --import tsx apps/api/src/cli/dev-bootstrap-admin.ts",
     "test:compose": "vitest run tests/compose",
     "compose:config": "pnpm test:compose && docker compose config",
+    "compose:config:production": "docker compose -f compose.production.yaml config",
     "compose:build": "docker compose build api worker web migrate"
   },
   "devDependencies": {

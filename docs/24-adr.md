@@ -321,3 +321,35 @@ Consequences:
 - The application owns enrollment and recovery; no upstream header or claim can bypass the factor.
 - Recovery codes are shown once after successful enrollment and cannot be recovered from storage.
 - Encryption-key rotation requires an explicit operational re-encryption procedure before replacing the active key.
+
+## ADR-020: Narrow Nginx Production Ingress
+
+Status: Accepted
+
+Decision:
+
+Use a single non-root Nginx container as the production Docker Compose TLS edge. It
+publishes only HTTP redirect and HTTPS, terminates deployment-injected TLS secrets,
+adds common browser security headers, and proxies all permitted traffic to Next.js.
+Next.js retains the existing same-first-party-site `/api/*` rewrite to Fastify. API,
+worker, migrations, PostgreSQL, Redis, object storage, health and metrics have no
+Internet-published port. Nginx overwrites forwarded headers and clears client request
+IDs; Fastify trusts exactly its one internal upstream hop and generates canonical IDs.
+
+Reason:
+
+The locked architecture requires a TLS/reverse-proxy boundary but does not select an
+ingress product. Nginx is a small, mature Compose-appropriate component that meets the
+required redirect, TLS, narrow routing and header-boundary needs without adding an
+orchestrator, monitoring platform, or second application routing framework.
+
+Consequences:
+
+- Certificate/key material, DNS, firewall policy and secret-store access remain
+  deployment-injected operational responsibility and are not committed.
+- Production uses a separate Compose file and externally provisioned private
+  PostgreSQL, Redis and S3-compatible storage; local Compose remains unchanged.
+- The public edge explicitly blocks health, metrics and API schema endpoints; a
+  private monitoring path must scrape API/worker metrics.
+- This decision does not create independent renderer process/network isolation. The
+  renderer remains capability-minimized but in the trusted worker process.

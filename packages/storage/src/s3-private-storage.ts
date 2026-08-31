@@ -29,6 +29,10 @@ export interface PrivateObjectStorage {
   delete(key: string): Promise<void>;
 }
 
+export interface PrivateObjectStorageFailureObserver {
+  onFailure(): void;
+}
+
 export class PrivateObjectTooLargeError extends Error {
   constructor() {
     super("Private object exceeds the configured read limit");
@@ -49,54 +53,79 @@ export const createS3Client = (config: PrivateObjectStorageConfig): S3Client => 
 export const ensurePrivateBucket = async (
   client: S3Client,
   bucket: string,
-  createWhenMissing: boolean
+  createWhenMissing: boolean,
+  observer?: PrivateObjectStorageFailureObserver
 ): Promise<void> => {
   try {
     await client.send(new HeadBucketCommand({ Bucket: bucket }));
-  } catch (error) {
-    if (!createWhenMissing) throw error;
-    await client.send(new CreateBucketCommand({ Bucket: bucket }));
+  } catch {
+    if (!createWhenMissing) {
+      observer?.onFailure();
+      throw new Error("Private bucket availability check failed");
+    }
+    try {
+      await client.send(new CreateBucketCommand({ Bucket: bucket }));
+    } catch {
+      observer?.onFailure();
+      throw new Error("Private bucket creation failed");
+    }
   }
 };
 
 export const createPrivateObjectStorage = (
   client: S3Client,
-  bucket: string
+  bucket: string,
+  observer?: PrivateObjectStorageFailureObserver
 ): PrivateObjectStorage => ({
   async put(input) {
-    await client.send(new PutObjectCommand({
-      Bucket: bucket,
-      Key: input.key,
-      Body: input.body,
-      ContentLength: input.body.byteLength,
-      ContentType: input.contentType,
-      Metadata: { "content-sha256": input.contentSha256Hex }
-    }));
+    try {
+      await client.send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: input.key,
+        Body: input.body,
+        ContentLength: input.body.byteLength,
+        ContentType: input.contentType,
+        Metadata: { "content-sha256": input.contentSha256Hex }
+      }));
+    } catch (error) {
+      observer?.onFailure();
+      throw error;
+    }
   },
 
   async get(key, maximumBytes) {
-    const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    if (response.ContentLength !== undefined && response.ContentLength > maximumBytes) {
-      throw new PrivateObjectTooLargeError();
-    }
-    if (response.Body === undefined) throw new Error("Private object response had no body");
-    const body = response.Body as AsyncIterable<Uint8Array | string> & { destroy?: () => void };
-    if (body[Symbol.asyncIterator] === undefined) throw new Error("Private object response body was not streamable");
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    for await (const chunk of body) {
-      const bytes = typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk);
-      totalBytes += bytes.byteLength;
-      if (totalBytes > maximumBytes) {
-        body.destroy?.();
+    try {
+      const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      if (response.ContentLength !== undefined && response.ContentLength > maximumBytes) {
         throw new PrivateObjectTooLargeError();
       }
-      chunks.push(bytes);
+      if (response.Body === undefined) throw new Error("Private object response had no body");
+      const body = response.Body as AsyncIterable<Uint8Array | string> & { destroy?: () => void };
+      if (body[Symbol.asyncIterator] === undefined) throw new Error("Private object response body was not streamable");
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      for await (const chunk of body) {
+        const bytes = typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk);
+        totalBytes += bytes.byteLength;
+        if (totalBytes > maximumBytes) {
+          body.destroy?.();
+          throw new PrivateObjectTooLargeError();
+        }
+        chunks.push(bytes);
+      }
+      return Buffer.concat(chunks, totalBytes);
+    } catch (error) {
+      observer?.onFailure();
+      throw error;
     }
-    return Buffer.concat(chunks, totalBytes);
   },
 
   async delete(key) {
-    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    } catch (error) {
+      observer?.onFailure();
+      throw error;
+    }
   }
 });

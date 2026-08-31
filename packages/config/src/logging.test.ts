@@ -4,7 +4,7 @@ import { createStructuredLoggerOptions, serializeErrorForLogging } from "./loggi
 
 describe("structured logging privacy", () => {
   it("redacts public verification tokens from request bodies", () => {
-    const options = createStructuredLoggerOptions("info");
+    const options = createStructuredLoggerOptions("info", "api");
 
     expect(options.redact.paths).toContain("req.body.token");
     expect(options.redact.paths).toContain("token");
@@ -21,6 +21,10 @@ describe("structured logging privacy", () => {
     expect(options.redact.paths).toContain("sessionId");
     expect(options.redact.paths).toContain("csrfToken");
     expect(options.redact.paths).toContain("storageKey");
+    expect(options.redact.paths).toContain("req.remoteAddress");
+    expect(options.redact.paths).toContain("req.headers.x-forwarded-for");
+    expect(options.redact.paths).toContain("request.ip");
+    expect(options.base).toEqual({ service: "api" });
     expect(options.redact.censor).toBe("[REDACTED]");
   });
 

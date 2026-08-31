@@ -78,4 +78,20 @@ describe("API foundation", () => {
     expect(ErrorResponseSchema.parse(response.body).error.code).toBe("NOT_FOUND");
     await app.close();
   });
+
+  it("exposes only aggregate internal metrics without request values", async () => {
+    const app = buildApi({ dependencies: healthyDependencies(), readinessTimeoutMs: 100, logger: false });
+    app.post("/api/public/verify", async () => ({ ok: true }));
+    await app.ready();
+
+    await request(app.server).post("/api/public/verify").send({ token: "must-not-appear-in-metrics" });
+    const response = await request(app.server).get("/metrics");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/plain");
+    expect(response.text).toContain("certificate_platform_http_requests_total");
+    expect(response.text).toContain("certificate_platform_public_verification_total");
+    expect(response.text).not.toContain("must-not-appear-in-metrics");
+    await app.close();
+  });
 });

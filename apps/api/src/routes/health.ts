@@ -3,6 +3,7 @@ import {
   createLivenessResponse,
   createReadinessResponse
 } from "@certificate-platform/contracts";
+import type { OperationalMetrics } from "@certificate-platform/config";
 import type { FastifyInstance } from "fastify";
 
 export interface ReadinessDependencies {
@@ -28,14 +29,32 @@ const withTimeout = async (operation: Promise<void>, timeoutMs: number): Promise
 export const registerHealthRoutes = (
   app: FastifyInstance,
   dependencies: ReadinessDependencies,
-  timeoutMs: number
+  timeoutMs: number,
+  metrics?: OperationalMetrics
 ): void => {
   app.get("/health/live", async (request) => createLivenessResponse("api", request.id));
 
   app.get("/health/ready", async (request, reply) => {
     try {
       await withTimeout(
-        Promise.all([dependencies.checkDatabase(), dependencies.checkRedis()]).then(() => undefined),
+        Promise.all([
+          dependencies.checkDatabase().then(
+            () => metrics?.recordReadiness("database", "success"),
+            (error: unknown) => {
+              metrics?.recordReadiness("database", "failure");
+              metrics?.recordDependencyFailure("database");
+              throw error;
+            }
+          ),
+          dependencies.checkRedis().then(
+            () => metrics?.recordReadiness("redis", "success"),
+            (error: unknown) => {
+              metrics?.recordReadiness("redis", "failure");
+              metrics?.recordDependencyFailure("redis");
+              throw error;
+            }
+          )
+        ]).then(() => undefined),
         timeoutMs
       );
       return createReadinessResponse("api", request.id);
