@@ -514,8 +514,9 @@ with safe diagnostic/recovery boundaries. It also describes production startup,
 migration, health, secret injection, private-only interfaces, logs/metrics and rollback
 limits.
 
-Phase 8.4 remains blocked on authorized backup/retention/versioning implementation and
-an isolated restore drill. Phase 8.5 remains blocked on a real production-like
+At the Phase 8.3 checkpoint, Phase 8.4 remained blocked on authorized
+backup/retention/versioning implementation and an isolated restore drill; Section 17
+records the subsequently completed repository tooling and isolated drill. Phase 8.5 remains blocked on a real production-like
 rehearsal: deployment-injected DNS/TLS/secrets/provider access, private smoke tests,
 migration/rollback exercise, alert routing/ownership, and restored-data verification.
 This Phase 8.3 code/documentation implementation does not claim those external
@@ -525,3 +526,9 @@ Evidence: `Dockerfile`, `compose.production.yaml`, `deploy/nginx/nginx.conf`,
 `packages/config/src/environment.ts`, `packages/config/src/metrics.ts`,
 `apps/api/src/app.ts`, `apps/worker/src/server.ts`, and focused configuration,
 health/metrics, storage, queue and Compose tests.
+
+## 17. Phase 8.4 implementation record
+
+The repository now contains explicit PostgreSQL custom-format backup and guarded isolated-restore controls, private durable-only S3 object copy/verification, ignored backup/drill artifacts and a dedicated PostgreSQL 16/MinIO Compose drill. The drill seeds synthetic tenant/template/version/asset/certificate/PDF/revocation/audit/cleanup and queue-outbox state, makes source targets unavailable, restores fresh targets and asserts tenant ownership, unchanged public identifier, revoked state, immutable issuance/template/generation relationships, asset/PDF bytes and metadata, historical signing `kid`, tenant-bound audit, durable cleanup intent, pending-delivery reconstruction and non-requeue of completed work. Redis sessions/rate limits remain deliberately unrecovered; stale non-terminal BullMQ delivery is reconstructed from PostgreSQL job/item/outbox state, while terminal work remains terminal.
+
+Provider evidence remains an operator control: private bucket policy, versioning, encryption, replication/export, lifecycle, separate backup identity, retention/deletion, off-site durability, alert routing, restore authorization and business-approved RPO/RTO. Phase 8.5 remains blocked on the production-like rehearsal, provider-injected DNS/TLS/secrets, alert ownership and approved operational values. This record does not update PR Part 4 or claim Phase 8 completion.

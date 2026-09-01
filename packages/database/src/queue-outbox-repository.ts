@@ -121,3 +121,49 @@ export const reconcileStaleParticipantImportOutbox = async (
       AND queue_outbox.dispatched_at <= ${staleBefore}
   `.execute(database);
 };
+
+export const reconcileStaleCertificateGenerationOutbox = async (
+  database: Kysely<Database>,
+  staleBefore: Date
+): Promise<void> => {
+  await sql`
+    INSERT INTO queue_outbox (
+      organization_id,
+      message_type,
+      deduplication_key,
+      payload_json
+    )
+    SELECT
+      job.organization_id,
+      'CERTIFICATE_GENERATION',
+      job.id::text || '-generate',
+      jsonb_build_object(
+        'version', 1,
+        'job_id', job.id,
+        'organization_id', job.organization_id
+      )
+    FROM jobs AS job
+    INNER JOIN certificate_generation_jobs AS detail
+      ON detail.job_id = job.id
+      AND detail.organization_id = job.organization_id
+    WHERE job.job_type = 'CERTIFICATE_GENERATION'
+      AND job.status IN ('QUEUED', 'RUNNING')
+      AND job.updated_at <= ${staleBefore}
+      AND EXISTS (
+        SELECT 1
+        FROM certificate_generation_items AS item
+        WHERE item.job_id = job.id
+          AND item.organization_id = job.organization_id
+          AND (
+            item.status IN ('PENDING', 'FAILED')
+            OR (item.status = 'RUNNING' AND item.updated_at <= ${staleBefore})
+          )
+      )
+    ON CONFLICT (organization_id, message_type, deduplication_key)
+    DO UPDATE SET
+      dispatched_at = NULL,
+      last_error_code = NULL
+    WHERE queue_outbox.dispatched_at IS NOT NULL
+      AND queue_outbox.dispatched_at <= ${staleBefore}
+  `.execute(database);
+};

@@ -43,6 +43,15 @@ Track:
 - BullMQ stalled/retried/dead-letter jobs reconciled with PostgreSQL job state
 - S3-compatible/MinIO request failures without object keys as metric labels
 
+### Phase 8.4 backup signals
+
+The operator backup boundary writes protected, low-cardinality status evidence for
+database backup result/timestamp/safe byte size, durable-object backup result/count,
+and restore-drill result/timestamp. Alerting must evaluate freshness from the last
+successful timestamp and provider-exposed bucket versioning/lifecycle/replication
+status. Do not emit backup filenames, object keys, tenant identifiers, credentials or
+participant data as metrics or log fields.
+
 Public metrics use aggregate result categories. Do not attach token values, certificate identifiers, recipient names, raw IP addresses or other high-cardinality PII as labels.
 
 ## Alerts

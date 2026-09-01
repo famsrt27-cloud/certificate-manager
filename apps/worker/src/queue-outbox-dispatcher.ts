@@ -2,6 +2,7 @@ import {
   claimPendingQueueOutbox,
   markQueueOutboxDispatched,
   markQueueOutboxFailed,
+  reconcileStaleCertificateGenerationOutbox,
   reconcileStaleParticipantImportOutbox,
   type DatabaseClient
 } from "@certificate-platform/database";
@@ -74,6 +75,10 @@ export class QueueOutboxDispatcher {
   async dispatchOnce(): Promise<QueueOutboxDispatchResult> {
     const now = this.#now();
     await reconcileStaleParticipantImportOutbox(
+      this.#database,
+      new Date(now.getTime() - this.#reconcileAfterMs)
+    );
+    await reconcileStaleCertificateGenerationOutbox(
       this.#database,
       new Date(now.getTime() - this.#reconcileAfterMs)
     );
