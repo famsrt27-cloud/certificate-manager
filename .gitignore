@@ -16,3 +16,9 @@ test-results/
 Thumbs.db
 *.log
 .local/
+
+# Operator-generated Phase 8.4 backup and isolated restore-drill artifacts.
+backup-artifacts/
+restore-drill-artifacts/
+# Phase 8.5 local-only TLS material, ephemeral configuration and sanitized run evidence.
+rehearsal-artifacts/

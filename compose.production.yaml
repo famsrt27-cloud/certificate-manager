@@ -1,0 +1,233 @@
+name: certificate-platform-production
+
+x-shared-runtime-environment: &shared-runtime-environment
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+  READINESS_TIMEOUT_MS: ${READINESS_TIMEOUT_MS:-2000}
+  OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:?OBJECT_STORAGE_ENDPOINT is required}
+  OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:?OBJECT_STORAGE_REGION is required}
+  OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:?OBJECT_STORAGE_BUCKET is required}
+  OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY is required}
+  OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY is required}
+  OBJECT_STORAGE_FORCE_PATH_STYLE: ${OBJECT_STORAGE_FORCE_PATH_STYLE:-false}
+  OBJECT_STORAGE_CREATE_BUCKET: "false"
+  PARTICIPANT_IMPORT_MAX_BYTES: ${PARTICIPANT_IMPORT_MAX_BYTES:-5242880}
+  PARTICIPANT_IMPORT_MAX_ROWS: ${PARTICIPANT_IMPORT_MAX_ROWS:-10000}
+  PARTICIPANT_IMPORT_MAX_UNCOMPRESSED_BYTES: ${PARTICIPANT_IMPORT_MAX_UNCOMPRESSED_BYTES:-26214400}
+  PARTICIPANT_IMPORT_RETENTION_HOURS: ${PARTICIPANT_IMPORT_RETENTION_HOURS:-168}
+  BULLMQ_PREFIX: ${BULLMQ_PREFIX:?BULLMQ_PREFIX is required}
+
+x-api-runtime-environment: &api-runtime-environment
+  <<: *shared-runtime-environment
+  API_HOST: 0.0.0.0
+  API_PORT: 3001
+  API_TRUST_PROXY_HOPS: "1"
+  SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+  SESSION_IDLE_TTL_SECONDS: ${SESSION_IDLE_TTL_SECONDS:-1800}
+  SESSION_ABSOLUTE_TTL_SECONDS: ${SESSION_ABSOLUTE_TTL_SECONDS:-28800}
+  BCRYPT_COST: ${BCRYPT_COST:-12}
+  ADMIN_ALLOWED_ORIGINS: ${ADMIN_ALLOWED_ORIGINS:?ADMIN_ALLOWED_ORIGINS is required}
+  ADMIN_MFA_POLICY: REQUIRED
+  ADMIN_MFA_ENCRYPTION_KEY: ${ADMIN_MFA_ENCRYPTION_KEY:?ADMIN_MFA_ENCRYPTION_KEY is required}
+  LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-900}
+  LOGIN_RATE_LIMIT_ACCOUNT_MAX: ${LOGIN_RATE_LIMIT_ACCOUNT_MAX:-5}
+  LOGIN_RATE_LIMIT_NETWORK_MAX: ${LOGIN_RATE_LIMIT_NETWORK_MAX:-20}
+  PUBLIC_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS: ${PUBLIC_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS:-60}
+  PUBLIC_VERIFICATION_RATE_LIMIT_NETWORK_MAX: ${PUBLIC_VERIFICATION_RATE_LIMIT_NETWORK_MAX:-30}
+  PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS: ${PUBLIC_DOWNLOAD_TOKEN_TTL_SECONDS:-60}
+  PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS: ${PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS:-60}
+  PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX: ${PUBLIC_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX:-10}
+  PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS: ${PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_SECONDS:-60}
+  PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX: ${PUBLIC_DOWNLOAD_RATE_LIMIT_NETWORK_MAX:-10}
+  PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_WINDOW_SECONDS: ${PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_WINDOW_SECONDS:-60}
+  PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_NETWORK_MAX: ${PUBLIC_CERTIFICATE_SEARCH_RATE_LIMIT_NETWORK_MAX:-5}
+  PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS: ${PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_WINDOW_SECONDS:-60}
+  PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX: ${PUBLIC_CERTIFICATE_SUGGESTION_RATE_LIMIT_NETWORK_MAX:-30}
+  PUBLIC_SEARCH_RESULT_TOKEN_TTL_SECONDS: ${PUBLIC_SEARCH_RESULT_TOKEN_TTL_SECONDS:-180}
+  PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS: ${PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_WINDOW_SECONDS:-60}
+  PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX: ${PUBLIC_SEARCH_DOWNLOAD_AUTHORIZE_RATE_LIMIT_NETWORK_MAX:-10}
+  CERTIFICATE_PDF_MAX_BYTES: ${CERTIFICATE_PDF_MAX_BYTES:-10485760}
+  TEMPLATE_ASSET_MAX_BYTES: ${TEMPLATE_ASSET_MAX_BYTES:-5242880}
+  VERIFICATION_ACTIVE_KID: ${VERIFICATION_ACTIVE_KID:?VERIFICATION_ACTIVE_KID is required}
+  VERIFICATION_SIGNING_KEYS_JSON: ${VERIFICATION_SIGNING_KEYS_JSON:?VERIFICATION_SIGNING_KEYS_JSON is required}
+
+x-worker-runtime-environment: &worker-runtime-environment
+  <<: *shared-runtime-environment
+  WORKER_HOST: 0.0.0.0
+  WORKER_HEALTH_PORT: 3002
+  PARTICIPANT_IMPORT_CONCURRENCY: ${PARTICIPANT_IMPORT_CONCURRENCY:-2}
+  CERTIFICATE_GENERATION_CONCURRENCY: ${CERTIFICATE_GENERATION_CONCURRENCY:-2}
+  CERTIFICATE_RENDER_MAX_ASSET_BYTES: ${CERTIFICATE_RENDER_MAX_ASSET_BYTES:-10485760}
+  CERTIFICATE_PDF_MAX_BYTES: ${CERTIFICATE_PDF_MAX_BYTES:-10485760}
+  VERIFICATION_PUBLIC_BASE_URL: ${VERIFICATION_PUBLIC_BASE_URL:?VERIFICATION_PUBLIC_BASE_URL is required}
+  VERIFICATION_SIGNING_KEYS_JSON: ${VERIFICATION_SIGNING_KEYS_JSON:?VERIFICATION_SIGNING_KEYS_JSON is required}
+
+x-service-hardening: &service-hardening
+  user: "10001:10001"
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  stop_grace_period: 30s
+  restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: "1.00"
+        memory: 768M
+        pids: 256
+
+services:
+  proxy:
+    image: nginx:1.28.0-alpine
+    user: "101:101"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 128
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - type: bind
+        source: ./deploy/nginx/nginx.conf
+        target: /etc/nginx/nginx.conf
+        read_only: true
+    tmpfs:
+      - /tmp:uid=101,gid=101,mode=1777,noexec,nosuid,size=32m
+    secrets:
+      - source: tls_certificate
+        target: tls_certificate
+        uid: "101"
+        gid: "101"
+        mode: 0400
+      - source: tls_private_key
+        target: tls_private_key
+        uid: "101"
+        gid: "101"
+        mode: 0400
+    networks:
+      - edge
+      - application
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    <<: *service-hardening
+    build:
+      context: .
+      target: web
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE_PATH: /api
+    tmpfs:
+      - /tmp:uid=10001,gid=10001,mode=1777,noexec,nosuid,size=32m
+      - /app/apps/web/.next/cache:uid=10001,gid=10001,mode=0700,noexec,nosuid,size=32m
+    networks:
+      - application
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  api:
+    <<: *service-hardening
+    build:
+      context: .
+      target: api
+    environment: *api-runtime-environment
+    tmpfs:
+      - /tmp:uid=10001,gid=10001,mode=1777,noexec,nosuid,size=32m
+    networks:
+      - application
+      - dependencies
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3001/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    <<: *service-hardening
+    build:
+      context: .
+      target: worker
+    environment: *worker-runtime-environment
+    tmpfs:
+      - /tmp:uid=10001,gid=10001,mode=1777,noexec,nosuid,size=32m
+    networks:
+      - dependencies
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3002/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    profiles:
+      - tools
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    tmpfs:
+      - /tmp:uid=10001,gid=10001,mode=1777,noexec,nosuid,size=32m
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 128
+    networks:
+      - dependencies
+
+networks:
+  edge:
+    name: certificate-platform-production-edge
+  application:
+    name: certificate-platform-production-application
+    internal: true
+  dependencies:
+    name: ${PRODUCTION_DEPENDENCY_NETWORK:?PRODUCTION_DEPENDENCY_NETWORK is required}
+    external: true
+
+secrets:
+  tls_certificate:
+    name: ${TLS_CERTIFICATE_SECRET_NAME:?TLS_CERTIFICATE_SECRET_NAME is required}
+    external: true
+  tls_private_key:
+    name: ${TLS_PRIVATE_KEY_SECRET_NAME:?TLS_PRIVATE_KEY_SECRET_NAME is required}
+    external: true

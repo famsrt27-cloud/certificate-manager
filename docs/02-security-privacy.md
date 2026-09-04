@@ -21,7 +21,7 @@
 - Resource IDs never replace permission and tenant checks.
 - `SUPER_ADMIN` is a separately assigned system role; other roles are organization membership roles.
 
-### Phase 2 authentication operating policy
+### Phase 2 authentication operating policy (complete; extended by Phase 8.2)
 
 - New password hashes require at least 12 Unicode characters and no more than 72 UTF-8 bytes. Passwords are never normalized or silently truncated. Login still performs a dummy bcrypt comparison for an unknown or inactive account so the response does not disclose account existence.
 - Bcrypt cost is configurable from 12 through 15 and defaults to 12. Deployments benchmark the selected cost against their login-latency budget; configuration cannot select a value below 12.
@@ -30,7 +30,7 @@
 - Login limiting uses keyed, non-PII Redis keys with a 15-minute window: five attempts per normalized account and 20 attempts per network source by default. Redis authentication-state failure fails closed with a safe `503` response.
 - Login and every state-changing authenticated operation require an exact allowed `Origin`. CSRF comparison is constant-time, and a token from a rotated/revoked session is invalid.
 - Audit events for login success/failure, logout, stale-session revocation and permission denial use fixed action-specific metadata. They never store email, password, session ID, CSRF token or raw network address.
-- The accepted API/database contract does not yet define an MFA factor. Phase 2 therefore permits `ADMIN_MFA_POLICY=DEFERRED_NON_PRODUCTION` only and configuration validation rejects API startup with `NODE_ENV=production`. Production enablement requires an approved schema/API/ADR change and tested MFA implementation; an upstream claim must not silently bypass this gate.
+- Phase 8.2 completes the production MFA extension to the Phase 2 authentication boundary. `ADMIN_MFA_POLICY` accepts `DEFERRED_NON_PRODUCTION` or `REQUIRED`; production requires `REQUIRED` plus a dedicated canonical base64url-encoded 32-byte `ADMIN_MFA_ENCRYPTION_KEY`. Required mode uses RFC 6238 TOTP (SHA-1, 6 digits, 30-second period, one-step skew), rejects accepted-timestep replay, and supports ten one-time high-entropy recovery codes stored only as salted scrypt hashes. TOTP secrets and pending enrollment state are AES-256-GCM encrypted at rest. Password success creates only a short-lived encrypted MFA challenge; a full session is created only after enrollment or factor verification, and sessions without MFA assurance are rejected while the policy is required.
 
 ## Public verification
 

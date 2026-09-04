@@ -34,6 +34,15 @@ export interface UsersTable extends TimestampedTable {
   status: Generated<RecordStatus>;
 }
 
+export interface AdminMfaFactorsTable {
+  user_id: string;
+  encrypted_totp_secret: string;
+  recovery_code_hashes: string[];
+  last_accepted_timestep: ColumnType<string | null, string | null | undefined, string | null>;
+  created_at: GeneratedTimestamp;
+  updated_at: GeneratedTimestamp;
+}
+
 export interface OrganizationMembershipsTable extends TimestampedTable {
   organization_id: string;
   user_id: string;
@@ -292,6 +301,7 @@ export interface VerificationEventsTable {
 export type DownloadEventsTable = VerificationEventsTable;
 
 export interface Database {
+  admin_mfa_factors: AdminMfaFactorsTable;
   organizations: OrganizationsTable;
   users: UsersTable;
   organization_memberships: OrganizationMembershipsTable;

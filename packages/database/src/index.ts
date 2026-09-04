@@ -7,9 +7,14 @@ export {
 } from "./development-admin-bootstrap.js";
 export {
   findAuthenticationUser,
+  findAdminMfaFactor,
+  enrollAdminMfaFactor,
+  acceptAdminMfaTimestep,
+  consumeAdminMfaRecoveryHash,
   insertAuditRecord,
   loadEffectiveIdentity,
   type AuthenticationUserRecord,
+  type AdminMfaFactorRecord,
   type NewAuditRecord,
   type ResolvedIdentityRecord,
   type ResolvedMembershipRecord

@@ -1,6 +1,9 @@
 import {
   AuthenticationResponseSchema,
+  LoginResponseSchema,
   LoginRequestSchema,
+  MfaCodeRequestSchema,
+  MfaCompletionResponseSchema,
   LogoutResponseSchema
 } from "@certificate-platform/contracts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -9,7 +12,10 @@ import { ApplicationError } from "../errors/application-error.js";
 import { LoginRateLimitError, type AuthenticationService } from "../modules/auth/authentication-service.js";
 import {
   createAdminSessionCookie,
+  createAdminMfaCookie,
   expireAdminSessionCookie,
+  expireAdminMfaCookie,
+  readAdminMfaCookie,
   readAdminSessionCookie
 } from "../modules/auth/cookie.js";
 
@@ -46,6 +52,16 @@ export const registerAdminAuthRoutes = (app: FastifyInstance, options: AdminAuth
         origin: typeof request.headers.origin === "string" ? request.headers.origin : undefined,
         previousSessionId: readAdminSessionCookie(request.headers.cookie)
       }));
+      if (result.kind === "MFA_PENDING") {
+        const data = result.status === "MFA_REQUIRED"
+          ? { status: result.status }
+          : { status: result.status, provisioning_uri: result.provisioningUri };
+        void reply
+          .headers(noStore)
+          .header("set-cookie", [createAdminMfaCookie(result.challengeId), expireAdminSessionCookie()])
+          .send(LoginResponseSchema.parse({ data, meta: { request_id: request.id } }));
+        return;
+      }
       void reply
         .headers(noStore)
         .header("set-cookie", createAdminSessionCookie(result.sessionId, options.absoluteTtlSeconds))
@@ -54,6 +70,31 @@ export const registerAdminAuthRoutes = (app: FastifyInstance, options: AdminAuth
       if (error instanceof LoginRateLimitError) void reply.header("retry-after", error.retryAfterSeconds);
       throw error;
     }
+  });
+
+  app.post("/api/admin/auth/mfa", async (request, reply) => {
+    const parsed = MfaCodeRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw new ApplicationError("VALIDATION_FAILED", "The request could not be processed.", 400);
+    const result = await safeAuthenticationOperation(request, () => options.service.completeMfa(
+      readAdminMfaCookie(request.headers.cookie),
+      parsed.data,
+      {
+        requestId: request.id,
+        networkAddress: request.ip,
+        origin: typeof request.headers.origin === "string" ? request.headers.origin : undefined,
+        previousSessionId: readAdminSessionCookie(request.headers.cookie)
+      }
+    ));
+    void reply
+      .headers(noStore)
+      .header("set-cookie", [
+        createAdminSessionCookie(result.sessionId, options.absoluteTtlSeconds),
+        expireAdminMfaCookie()
+      ])
+      .send(MfaCompletionResponseSchema.parse({
+        data: { ...result.data, ...(result.recoveryCodes === undefined ? {} : { recovery_codes: result.recoveryCodes }) },
+        meta: { request_id: request.id }
+      }));
   });
 
   app.get("/api/admin/auth/session", async (request, reply) => {

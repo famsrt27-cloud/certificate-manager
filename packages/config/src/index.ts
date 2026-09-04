@@ -12,3 +12,12 @@ export {
   type WorkerEnvironment
 } from "./environment.js";
 export { createStructuredLoggerOptions, serializeErrorForLogging, type StructuredLoggerOptions } from "./logging.js";
+export {
+  createOperationalMetrics,
+  OperationalMetrics,
+  type DependencyName,
+  type GenerationEvent,
+  type OperationalService,
+  type OperationResult,
+  type RateLimitScope
+} from "./metrics.js";

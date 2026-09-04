@@ -22,6 +22,7 @@
 - [x] bcrypt authentication
 - [x] Redis opaque sessions
 - [x] Session-bound CSRF
+- [x] Production TOTP MFA and one-time recovery codes
 - [x] RBAC
 - [x] Organization memberships and scoped roles
 - [x] Projects

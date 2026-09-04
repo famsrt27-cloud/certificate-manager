@@ -1,10 +1,18 @@
 import {
+  createTotpProvisioningUri,
+  findTotpTimestep,
+  generateRecoveryCodes,
+  generateTotpSecret,
+  hashRecoveryCode,
+  verifyRecoveryCode,
   verifyPassword,
   type LoginRateLimiter,
+  type MfaSecretCipher,
+  type RedisMfaChallengeStore,
   type RedisSessionStore,
   type SessionRecord
 } from "@certificate-platform/auth";
-import type { AuthenticationData, LoginRequest } from "@certificate-platform/contracts";
+import type { AuthenticationData, LoginRequest, MfaCodeRequest } from "@certificate-platform/contracts";
 import {
   createAuthorizationVersion,
   type AuditEvent,
@@ -24,6 +32,19 @@ export interface AuthenticationUser {
 export interface IdentityProvider {
   findByNormalizedEmail(email: string): Promise<AuthenticationUser | null>;
   loadEffectiveIdentity(userId: string): Promise<EffectiveIdentity | null>;
+}
+
+export interface MfaFactor {
+  readonly encryptedTotpSecret: string;
+  readonly recoveryCodeHashes: readonly string[];
+  readonly lastAcceptedTimestep: number | null;
+}
+
+export interface MfaFactorProvider {
+  find(userId: string): Promise<MfaFactor | null>;
+  enroll(userId: string, encryptedSecret: string, recoveryHashes: readonly string[], timestep: number): Promise<boolean>;
+  acceptTimestep(userId: string, timestep: number): Promise<boolean>;
+  consumeRecoveryHash(userId: string, hash: string): Promise<boolean>;
 }
 
 export interface LoginContext {
@@ -56,7 +77,17 @@ export interface AuthenticationServiceOptions {
   readonly allowedOrigins: readonly string[];
   readonly dummyPasswordHash: string;
   readonly passwordVerifier?: typeof verifyPassword;
+  readonly mfaPolicy?: "DEFERRED_NON_PRODUCTION" | "REQUIRED";
+  readonly mfaChallenges?: RedisMfaChallengeStore;
+  readonly mfaFactors?: MfaFactorProvider;
+  readonly mfaCipher?: MfaSecretCipher;
+  readonly now?: () => number;
 }
+
+export type LoginResult =
+  | { readonly kind: "AUTHENTICATED"; readonly sessionId: string; readonly data: AuthenticationData }
+  | { readonly kind: "MFA_PENDING"; readonly challengeId: string; readonly status: "MFA_REQUIRED" }
+  | { readonly kind: "MFA_PENDING"; readonly challengeId: string; readonly status: "MFA_ENROLLMENT_REQUIRED"; readonly provisioningUri: string };
 
 export class AuthenticationService {
   readonly #sessions: RedisSessionStore;
@@ -66,9 +97,15 @@ export class AuthenticationService {
   readonly #allowedOrigins: ReadonlySet<string>;
   readonly #dummyPasswordHash: string;
   readonly #passwordVerifier: typeof verifyPassword;
+  readonly #mfaPolicy: "DEFERRED_NON_PRODUCTION" | "REQUIRED";
+  readonly #mfaChallenges: RedisMfaChallengeStore | undefined;
+  readonly #mfaFactors: MfaFactorProvider | undefined;
+  readonly #mfaCipher: MfaSecretCipher | undefined;
+  readonly #now: () => number;
 
   constructor({ sessions, rateLimiter, identities, audit, allowedOrigins, dummyPasswordHash,
-    passwordVerifier = verifyPassword }: AuthenticationServiceOptions) {
+    passwordVerifier = verifyPassword, mfaPolicy = "DEFERRED_NON_PRODUCTION", mfaChallenges,
+    mfaFactors, mfaCipher, now = Date.now }: AuthenticationServiceOptions) {
     this.#sessions = sessions;
     this.#rateLimiter = rateLimiter;
     this.#identities = identities;
@@ -76,9 +113,17 @@ export class AuthenticationService {
     this.#allowedOrigins = new Set(allowedOrigins);
     this.#dummyPasswordHash = dummyPasswordHash;
     this.#passwordVerifier = passwordVerifier;
+    this.#mfaPolicy = mfaPolicy;
+    this.#mfaChallenges = mfaChallenges;
+    this.#mfaFactors = mfaFactors;
+    this.#mfaCipher = mfaCipher;
+    this.#now = now;
+    if (mfaPolicy === "REQUIRED" && (mfaChallenges === undefined || mfaFactors === undefined || mfaCipher === undefined)) {
+      throw new Error("Required MFA dependencies are unavailable");
+    }
   }
 
-  async login(input: LoginRequest, context: LoginContext): Promise<{ sessionId: string; data: AuthenticationData }> {
+  async login(input: LoginRequest, context: LoginContext): Promise<LoginResult> {
     this.assertAllowedOrigin(context.origin);
     const limit = await this.#rateLimiter.consume(input.email, context.networkAddress);
     if (!limit.allowed) {
@@ -99,25 +144,120 @@ export class AuthenticationService {
       throw new ApplicationError("AUTHENTICATION_FAILED", "Authentication failed.", 401);
     }
 
-    const created = await this.#sessions.create(
-      user.id,
-      createAuthorizationVersion(identity),
+    if (this.#mfaPolicy === "REQUIRED") {
+      if (context.previousSessionId !== undefined) await this.#sessions.revoke(context.previousSessionId);
+      const factor = await this.#requiredMfaFactors().find(user.id);
+      if (factor !== null) {
+        const challengeId = await this.#requiredMfaChallenges().create({ userId: user.id, kind: "CHALLENGE" });
+        return { kind: "MFA_PENDING", challengeId, status: "MFA_REQUIRED" };
+      }
+      const secret = generateTotpSecret();
+      const recoveryCodes = generateRecoveryCodes();
+      const challengeId = await this.#requiredMfaChallenges().create({
+        userId: user.id,
+        kind: "ENROLLMENT",
+        secret,
+        recoveryCodes: [...recoveryCodes]
+      });
+      return {
+        kind: "MFA_PENDING",
+        challengeId,
+        status: "MFA_ENROLLMENT_REQUIRED",
+        provisioningUri: createTotpProvisioningUri(secret, user.email)
+      };
+    }
+
+    return this.#createFullSession(user.id, identity, input.email, context.requestId, context.previousSessionId);
+  }
+
+  async completeMfa(
+    challengeId: string | undefined,
+    input: MfaCodeRequest,
+    context: LoginContext
+  ): Promise<{ sessionId: string; data: AuthenticationData; recoveryCodes?: readonly string[] }> {
+    this.assertAllowedOrigin(context.origin);
+    if (this.#mfaPolicy !== "REQUIRED" || challengeId === undefined) this.#throwMfaFailure();
+    const challenges = this.#requiredMfaChallenges();
+    const challenge = await challenges.take(challengeId);
+    if (challenge === null) this.#throwMfaFailure();
+    const identity = await this.#identities.loadEffectiveIdentity(challenge.userId);
+    if (identity === null) {
+      this.#throwMfaFailure();
+    }
+
+    let recoveryCodes: readonly string[] | undefined;
+    let accepted = false;
+    if (challenge.kind === "ENROLLMENT") {
+      const timestep = findTotpTimestep(challenge.secret!, input.code, this.#now());
+      if (timestep !== null) {
+        const hashes = await Promise.all(challenge.recoveryCodes!.map(hashRecoveryCode));
+        accepted = await this.#requiredMfaFactors().enroll(
+          challenge.userId,
+          this.#requiredMfaCipher().encrypt(challenge.secret!),
+          hashes,
+          timestep
+        );
+        if (accepted) recoveryCodes = challenge.recoveryCodes;
+      }
+    } else {
+      const factor = await this.#requiredMfaFactors().find(challenge.userId);
+      if (factor !== null) {
+        if (/^\d{6}$/.test(input.code)) {
+          const timestep = findTotpTimestep(this.#requiredMfaCipher().decrypt(factor.encryptedTotpSecret), input.code, this.#now());
+          accepted = timestep !== null && await this.#requiredMfaFactors().acceptTimestep(challenge.userId, timestep);
+        } else {
+          for (const hash of factor.recoveryCodeHashes) {
+            if (await verifyRecoveryCode(input.code, hash)) {
+              accepted = await this.#requiredMfaFactors().consumeRecoveryHash(challenge.userId, hash);
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (!accepted) {
+      await challenges.recordFailure(challengeId, challenge);
+      await this.#writeAuthenticationFailure(context.requestId, "INVALID_CREDENTIALS");
+      this.#throwMfaFailure();
+    }
+
+    const completed = await this.#createFullSession(
+      challenge.userId,
+      identity,
+      identity.user.email.toLowerCase(),
+      context.requestId,
       context.previousSessionId
     );
+    return { sessionId: completed.sessionId, data: completed.data, ...(recoveryCodes === undefined ? {} : { recoveryCodes }) };
+  }
+
+  async #createFullSession(
+    userId: string,
+    identity: EffectiveIdentity,
+    normalizedEmail: string,
+    requestId: string,
+    previousSessionId: string | undefined
+  ): Promise<{ kind: "AUTHENTICATED"; sessionId: string; data: AuthenticationData }> {
+    const created = await this.#sessions.create(
+      userId,
+      createAuthorizationVersion(identity),
+      previousSessionId,
+      this.#mfaPolicy === "REQUIRED"
+    );
     try {
-      await this.#rateLimiter.resetAccount(input.email);
+      await this.#rateLimiter.resetAccount(normalizedEmail);
       await this.#audit.write(this.#auditEvent({
         action: "AUTH_LOGIN_SUCCEEDED",
-        requestId: context.requestId,
-        actorUserId: user.id,
-        resourceId: user.id,
+        requestId,
+        actorUserId: userId,
+        resourceId: userId,
         metadata: null
       }));
     } catch (error) {
       await this.#sessions.revoke(created.sessionId);
       throw error;
     }
-    return { sessionId: created.sessionId, data: this.#toData(identity, created.record) };
+    return { kind: "AUTHENTICATED", sessionId: created.sessionId, data: this.#toData(identity, created.record) };
   }
 
   async authenticate(
@@ -128,6 +268,10 @@ export class AuthenticationService {
     if (sessionId === undefined) return null;
     const session = await this.#sessions.resolve(sessionId);
     if (session === null) return null;
+    if (this.#mfaPolicy === "REQUIRED" && !session.mfaVerified) {
+      await this.#sessions.revoke(sessionId);
+      return null;
+    }
 
     const identity = await this.#identities.loadEffectiveIdentity(session.userId);
     if (identity === null) {
@@ -247,5 +391,24 @@ export class AuthenticationService {
       requestId: input.requestId,
       metadata: input.metadata
     };
+  }
+
+  #throwMfaFailure(): never {
+    throw new ApplicationError("AUTHENTICATION_FAILED", "Authentication failed.", 401);
+  }
+
+  #requiredMfaChallenges(): RedisMfaChallengeStore {
+    if (this.#mfaChallenges === undefined) throw new Error("MFA challenge store is unavailable");
+    return this.#mfaChallenges;
+  }
+
+  #requiredMfaFactors(): MfaFactorProvider {
+    if (this.#mfaFactors === undefined) throw new Error("MFA factor provider is unavailable");
+    return this.#mfaFactors;
+  }
+
+  #requiredMfaCipher(): MfaSecretCipher {
+    if (this.#mfaCipher === undefined) throw new Error("MFA secret cipher is unavailable");
+    return this.#mfaCipher;
   }
 }

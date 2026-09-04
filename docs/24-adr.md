@@ -304,3 +304,52 @@ Public discovery is an organization-opt-in boundary with default off. Included c
 Each result carries a distinct 180-second search-result capability. Its exchange rechecks current publication state and issues the existing download capability, so private object storage and final redemption controls remain unchanged. The base schema/policy extension is recorded in migration `202608300009_public-certificate-search`; the indexed canonical title handling is recorded in migration `202608310010_canonical-recipient-name-search`. Administration is limited to one organization-level toggle on the existing dashboard rather than a new settings subsystem.
 
 Public project/training discovery is label-only and prefix-gated against the same opted-in `AVAILABLE` snapshot boundary. No stable public context identifier is needed because the selected canonical label is submitted to the existing exact normalized search contract. The current policy remains organization-wide. A possible future enhancement is per-training public-search visibility, but it requires a separately reviewed domain/schema/API change and is not implemented here.
+
+## ADR-019: Production Admin TOTP MFA Gate
+
+Status: Accepted
+
+Decision:
+
+Production requires application-owned RFC 6238 TOTP after password verification. Password success creates only a five-minute encrypted Redis challenge; it never creates a full admin session. A missing factor enters explicit enrollment, while an existing factor enters verification. TOTP uses SHA-1, six digits, a 30-second period and a one-step skew window. PostgreSQL atomically advances the last accepted timestep to prevent replay. Ten random 144-bit recovery codes are issued once at enrollment, retained only as salted scrypt hashes, and removed atomically on use.
+
+TOTP secrets and pending enrollment material are encrypted with AES-256-GCM under a dedicated 32-byte environment key. Production configuration fails unless the policy is `REQUIRED` and the key is valid. MFA assurance is recorded in the server-side session so legacy or deferred sessions cannot satisfy required mode. Origin checks, generic failures, login throttling, tenant authorization, CSRF after session creation, rotation and logout remain unchanged.
+
+Consequences:
+
+- Migration `202608310011_admin-mfa` is the only schema addition and historical migrations remain unchanged.
+- The application owns enrollment and recovery; no upstream header or claim can bypass the factor.
+- Recovery codes are shown once after successful enrollment and cannot be recovered from storage.
+- Encryption-key rotation requires an explicit operational re-encryption procedure before replacing the active key.
+
+## ADR-020: Narrow Nginx Production Ingress
+
+Status: Accepted
+
+Decision:
+
+Use a single non-root Nginx container as the production Docker Compose TLS edge. It
+publishes only HTTP redirect and HTTPS, terminates deployment-injected TLS secrets,
+adds common browser security headers, and proxies all permitted traffic to Next.js.
+Next.js retains the existing same-first-party-site `/api/*` rewrite to Fastify. API,
+worker, migrations, PostgreSQL, Redis, object storage, health and metrics have no
+Internet-published port. Nginx overwrites forwarded headers and clears client request
+IDs; Fastify trusts exactly its one internal upstream hop and generates canonical IDs.
+
+Reason:
+
+The locked architecture requires a TLS/reverse-proxy boundary but does not select an
+ingress product. Nginx is a small, mature Compose-appropriate component that meets the
+required redirect, TLS, narrow routing and header-boundary needs without adding an
+orchestrator, monitoring platform, or second application routing framework.
+
+Consequences:
+
+- Certificate/key material, DNS, firewall policy and secret-store access remain
+  deployment-injected operational responsibility and are not committed.
+- Production uses a separate Compose file and externally provisioned private
+  PostgreSQL, Redis and S3-compatible storage; local Compose remains unchanged.
+- The public edge explicitly blocks health, metrics and API schema endpoints; a
+  private monitoring path must scrape API/worker metrics.
+- This decision does not create independent renderer process/network isolation. The
+  renderer remains capability-minimized but in the trusted worker process.

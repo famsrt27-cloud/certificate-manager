@@ -10,6 +10,78 @@ export interface AuthenticationUserRecord {
   readonly status: RecordStatus;
 }
 
+export interface AdminMfaFactorRecord {
+  readonly encryptedTotpSecret: string;
+  readonly recoveryCodeHashes: readonly string[];
+  readonly lastAcceptedTimestep: number | null;
+}
+
+export const findAdminMfaFactor = async (
+  database: Kysely<Database>,
+  userId: string
+): Promise<AdminMfaFactorRecord | null> => {
+  const row = await database.selectFrom("admin_mfa_factors")
+    .select(["encrypted_totp_secret", "recovery_code_hashes", "last_accepted_timestep"])
+    .where("user_id", "=", userId)
+    .executeTakeFirst();
+  if (row === undefined) return null;
+  return {
+    encryptedTotpSecret: row.encrypted_totp_secret,
+    recoveryCodeHashes: row.recovery_code_hashes,
+    lastAcceptedTimestep: row.last_accepted_timestep === null ? null : Number(row.last_accepted_timestep)
+  };
+};
+
+export const enrollAdminMfaFactor = async (
+  database: Kysely<Database>,
+  userId: string,
+  encryptedTotpSecret: string,
+  recoveryCodeHashes: readonly string[],
+  acceptedTimestep: number
+): Promise<boolean> => {
+  const result = await database.insertInto("admin_mfa_factors").values({
+    user_id: userId,
+    encrypted_totp_secret: encryptedTotpSecret,
+    recovery_code_hashes: [...recoveryCodeHashes],
+    last_accepted_timestep: String(acceptedTimestep)
+  }).onConflict((conflict) => conflict.column("user_id").doNothing()).returning("user_id").executeTakeFirst();
+  return result !== undefined;
+};
+
+export const acceptAdminMfaTimestep = async (
+  database: Kysely<Database>,
+  userId: string,
+  timestep: number
+): Promise<boolean> => {
+  const result = await database.updateTable("admin_mfa_factors")
+    .set({ last_accepted_timestep: String(timestep), updated_at: new Date() })
+    .where("user_id", "=", userId)
+    .where((expression) => expression.or([
+      expression("last_accepted_timestep", "is", null),
+      expression("last_accepted_timestep", "<", String(timestep))
+    ]))
+    .returning("user_id")
+    .executeTakeFirst();
+  return result !== undefined;
+};
+
+export const consumeAdminMfaRecoveryHash = async (
+  database: Kysely<Database>,
+  userId: string,
+  recoveryHash: string
+): Promise<boolean> => {
+  const result = await database.updateTable("admin_mfa_factors")
+    .set({
+      recovery_code_hashes: sql<string[]>`array_remove(recovery_code_hashes, ${recoveryHash})`,
+      updated_at: new Date()
+    })
+    .where("user_id", "=", userId)
+    .where(sql<boolean>`${recoveryHash} = ANY(recovery_code_hashes)`)
+    .returning("user_id")
+    .executeTakeFirst();
+  return result !== undefined;
+};
+
 export interface ResolvedMembershipRecord {
   readonly id: string;
   readonly organizationId: string;

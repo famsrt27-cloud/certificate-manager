@@ -42,4 +42,25 @@ describe("worker health boundary", () => {
     expect(JSON.stringify(body)).not.toContain("private redis detail");
     await app.close();
   });
+
+  it("renders private aggregate metrics without health dependency detail", async () => {
+    const app = buildWorkerHealthApp({
+      dependencies: {
+        checkDatabase: vi.fn().mockResolvedValue(undefined),
+        checkRedis: vi.fn().mockResolvedValue(undefined)
+      },
+      readinessTimeoutMs: 100,
+      logger: false
+    });
+    await app.ready();
+
+    await request(app.server).get("/health/live");
+    const response = await request(app.server).get("/metrics");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/plain");
+    expect(response.text).toContain("certificate_platform_http_requests_total");
+    expect(response.text).not.toContain("private redis detail");
+    await app.close();
+  });
 });

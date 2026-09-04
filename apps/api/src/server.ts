@@ -1,5 +1,6 @@
-import { loadApiEnvironment } from "@certificate-platform/config";
-import { LoginRateLimiter, PublicVerificationRateLimiter, RedisSessionStore, hashPassword } from "@certificate-platform/auth";
+import { createOperationalMetrics, loadApiEnvironment } from "@certificate-platform/config";
+import { LoginRateLimiter, MfaSecretCipher, PublicVerificationRateLimiter, RedisMfaChallengeStore,
+  RedisSessionStore, hashPassword } from "@certificate-platform/auth";
 import {
   checkDatabase,
   closeDatabase,
@@ -11,6 +12,10 @@ import {
   suggestPublicCertificateProjects,
   suggestPublicCertificateTrainings,
   findAuthenticationUser,
+  findAdminMfaFactor,
+  enrollAdminMfaFactor,
+  acceptAdminMfaTimestep,
+  consumeAdminMfaRecoveryHash,
   findPublicCertificateVerification,
   insertAuditRecord,
   loadEffectiveIdentity
@@ -40,6 +45,7 @@ import { PublicCertificateSearchService } from "./modules/phase-six/public-certi
 import { PublicSearchDownloadAuthorizationService } from "./modules/phase-six/public-search-download-authorization-service.js";
 
 const environment = loadApiEnvironment();
+const metrics = createOperationalMetrics("api");
 const database = createDatabase({
   connectionString: environment.DATABASE_URL,
   maxConnections: environment.DATABASE_MAX_CONNECTIONS
@@ -57,9 +63,13 @@ const s3 = createS3Client({
   secretAccessKey: environment.OBJECT_STORAGE_SECRET_KEY,
   forcePathStyle: environment.OBJECT_STORAGE_FORCE_PATH_STYLE
 });
-await ensurePrivateBucket(s3, environment.OBJECT_STORAGE_BUCKET, environment.OBJECT_STORAGE_CREATE_BUCKET);
-const storage = createPrivateObjectStorage(s3, environment.OBJECT_STORAGE_BUCKET);
-const authRedis = createAuthRedisStore(redis);
+await ensurePrivateBucket(s3, environment.OBJECT_STORAGE_BUCKET, environment.OBJECT_STORAGE_CREATE_BUCKET, {
+  onFailure: () => metrics.recordObjectStorageFailure()
+});
+const storage = createPrivateObjectStorage(s3, environment.OBJECT_STORAGE_BUCKET, {
+  onFailure: () => metrics.recordObjectStorageFailure()
+});
+const authRedis = createAuthRedisStore(redis, { onFailure: () => metrics.recordRedisSessionFailure() });
 const sessions = new RedisSessionStore({
   redis: authRedis,
   configuration: {
@@ -75,11 +85,29 @@ const rateLimiter = new LoginRateLimiter(authRedis, {
   networkMaximum: environment.LOGIN_RATE_LIMIT_NETWORK_MAX
 });
 const dummyPasswordHash = await hashPassword("constant-dummy-authentication-password", environment.BCRYPT_COST);
+const mfaCipher = environment.ADMIN_MFA_ENCRYPTION_KEY === undefined
+  ? undefined
+  : new MfaSecretCipher(environment.ADMIN_MFA_ENCRYPTION_KEY);
+const mfaChallenges = environment.ADMIN_MFA_ENCRYPTION_KEY === undefined
+  ? undefined
+  : new RedisMfaChallengeStore(authRedis, environment.ADMIN_MFA_ENCRYPTION_KEY);
 const authenticationService = new AuthenticationService({
   sessions,
   rateLimiter,
   allowedOrigins: environment.ADMIN_ALLOWED_ORIGINS,
   dummyPasswordHash,
+  mfaPolicy: environment.ADMIN_MFA_POLICY,
+  ...(mfaCipher === undefined || mfaChallenges === undefined ? {} : {
+    mfaCipher,
+    mfaChallenges,
+    mfaFactors: {
+      find: (userId: string) => findAdminMfaFactor(database, userId),
+      enroll: (userId: string, secret: string, hashes: readonly string[], timestep: number) =>
+        enrollAdminMfaFactor(database, userId, secret, hashes, timestep),
+      acceptTimestep: (userId: string, timestep: number) => acceptAdminMfaTimestep(database, userId, timestep),
+      consumeRecoveryHash: (userId: string, hash: string) => consumeAdminMfaRecoveryHash(database, userId, hash)
+    }
+  }),
   identities: {
     findByNormalizedEmail: (email) => findAuthenticationUser(database, email),
     loadEffectiveIdentity: (userId) => loadEffectiveIdentity(database, userId)
@@ -206,6 +234,8 @@ const app = buildApi({
   },
   readinessTimeoutMs: environment.READINESS_TIMEOUT_MS,
   logLevel: environment.LOG_LEVEL,
+  metrics,
+  trustedProxyHops: environment.API_TRUST_PROXY_HOPS,
   authentication: {
     service: authenticationService,
     absoluteTtlSeconds: environment.SESSION_ABSOLUTE_TTL_SECONDS

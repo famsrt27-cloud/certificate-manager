@@ -25,12 +25,15 @@ const SessionRecordSchema = z.object({
   userId: z.uuid(),
   csrfToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   authorizationVersion: z.string().regex(/^[a-f0-9]{64}$/),
+  mfaVerified: z.boolean().default(false),
   createdAt: z.number().int().nonnegative(),
   lastSeenAt: z.number().int().nonnegative(),
   absoluteExpiresAt: z.number().int().positive()
 });
 
-export type SessionRecord = z.infer<typeof SessionRecordSchema>;
+export type SessionRecord = Omit<z.infer<typeof SessionRecordSchema>, "mfaVerified"> & {
+  readonly mfaVerified?: boolean;
+};
 
 export interface CreatedSession {
   readonly sessionId: string;
@@ -65,7 +68,7 @@ export class RedisSessionStore {
     this.#randomToken = randomToken;
   }
 
-  async create(userId: string, authorizationVersion: string, previousSessionId?: string): Promise<CreatedSession> {
+  async create(userId: string, authorizationVersion: string, previousSessionId?: string, mfaVerified = false): Promise<CreatedSession> {
     if (previousSessionId !== undefined) await this.revoke(previousSessionId);
 
     const now = this.#now();
@@ -75,6 +78,7 @@ export class RedisSessionStore {
       userId,
       csrfToken: this.#randomToken(),
       authorizationVersion,
+      mfaVerified,
       createdAt: now,
       lastSeenAt: now,
       absoluteExpiresAt: now + this.#configuration.absoluteTtlSeconds * 1_000

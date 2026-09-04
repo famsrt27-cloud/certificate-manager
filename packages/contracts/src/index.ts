@@ -17,12 +17,19 @@ export {
   AuthenticatedUserSchema,
   AuthenticationDataSchema,
   AuthenticationResponseSchema,
+  LoginResponseSchema,
   LoginRequestSchema,
+  MfaCodeRequestSchema,
+  MfaCompletionResponseSchema,
+  MfaPendingDataSchema,
   LogoutResponseSchema,
   OrganizationRoleCodeSchema,
   type AuthenticationData,
   type AuthenticationResponse,
+  type LoginResponse,
   type LoginRequest,
+  type MfaCodeRequest,
+  type MfaCompletionResponse,
   type LogoutResponse
 } from "./authentication.js";
 export * from "./phase-three.js";
