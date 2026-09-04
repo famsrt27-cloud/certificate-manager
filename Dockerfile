@@ -36,6 +36,9 @@ RUN pnpm --filter @certificate-platform/web... build \
 FROM build AS api-dependencies
 RUN pnpm --filter @certificate-platform/api --prod deploy --legacy /runtime
 
+FROM build AS web-dependencies
+RUN pnpm --filter @certificate-platform/web --prod deploy --legacy /runtime
+
 FROM build AS worker-dependencies
 RUN pnpm --filter @certificate-platform/worker --prod deploy --legacy /runtime
 
@@ -51,6 +54,7 @@ ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 COPY --from=build --chown=certificate:certificate /workspace/apps/web/.next/standalone ./
 COPY --from=build --chown=certificate:certificate /workspace/apps/web/.next/static ./apps/web/.next/static
+COPY --from=web-dependencies --chown=certificate:certificate /runtime/node_modules ./node_modules
 EXPOSE 3000
 CMD ["node", "apps/web/server.js"]
 

@@ -1,0 +1,206 @@
+# Additive, local-only Phase 8.5 harness.  Always invoke it together with
+# compose.production.yaml; this file must not be used as a replacement production
+# definition.  Its generated env/certificates live in ignored rehearsal-artifacts/.
+name: certificate-platform-rehearsal
+
+services:
+  proxy:
+    user: "101:0"
+    secrets: !reset []
+    ports: !override
+      - "127.0.0.1:${REHEARSAL_HTTP_PORT:-18080}:8080"
+      - "127.0.0.1:${REHEARSAL_HTTPS_PORT:-18443}:8443"
+    volumes:
+      - type: bind
+        source: ${REHEARSAL_EDGE_CERT_FILE:?REHEARSAL_EDGE_CERT_FILE is required}
+        target: /run/secrets/tls_certificate
+        read_only: true
+      - type: bind
+        source: ${REHEARSAL_EDGE_KEY_FILE:?REHEARSAL_EDGE_KEY_FILE is required}
+        target: /run/secrets/tls_private_key
+        read_only: true
+    depends_on:
+      web:
+        condition: service_healthy
+
+  api:
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/rehearsal/ca.crt
+    volumes:
+      - type: bind
+        source: ${REHEARSAL_CA_FILE:?REHEARSAL_CA_FILE is required}
+        target: /run/rehearsal/ca.crt
+        read_only: true
+      - type: bind
+        source: ./ops/rehearsal/storage-recovery-probe.mjs
+        target: /run/rehearsal/storage-recovery-probe.mjs
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      storage-bootstrap:
+        condition: service_completed_successfully
+
+  worker:
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/rehearsal/ca.crt
+    volumes:
+      - type: bind
+        source: ${REHEARSAL_CA_FILE:?REHEARSAL_CA_FILE is required}
+        target: /run/rehearsal/ca.crt
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      storage-bootstrap:
+        condition: service_completed_successfully
+
+  migrate:
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/rehearsal/ca.crt
+    volumes:
+      - type: bind
+        source: ${REHEARSAL_CA_FILE:?REHEARSAL_CA_FILE is required}
+        target: /run/rehearsal/ca.crt
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16.12-alpine
+    environment:
+      POSTGRES_DB: ${REHEARSAL_POSTGRES_DATABASE:?REHEARSAL_POSTGRES_DATABASE is required}
+      POSTGRES_USER: ${REHEARSAL_POSTGRES_USER:?REHEARSAL_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${REHEARSAL_POSTGRES_PASSWORD:?REHEARSAL_POSTGRES_PASSWORD is required}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        cp /run/rehearsal/postgres.key /var/lib/postgresql/tls/postgres.key;
+        chown postgres:postgres /var/lib/postgresql/tls/postgres.key;
+        chmod 600 /var/lib/postgresql/tls/postgres.key;
+        exec /usr/local/bin/docker-entrypoint.sh postgres
+        -c ssl=on
+        -c ssl_cert_file=/run/rehearsal/postgres.crt
+        -c ssl_key_file=/var/lib/postgresql/tls/postgres.key
+    volumes:
+      - rehearsal-postgres:/var/lib/postgresql/data
+      - rehearsal-postgres-tls:/var/lib/postgresql/tls
+      - type: bind
+        source: ${REHEARSAL_POSTGRES_CERT_FILE:?REHEARSAL_POSTGRES_CERT_FILE is required}
+        target: /run/rehearsal/postgres.crt
+        read_only: true
+      - type: bind
+        source: ${REHEARSAL_POSTGRES_KEY_FILE:?REHEARSAL_POSTGRES_KEY_FILE is required}
+        target: /run/rehearsal/postgres.key
+        read_only: true
+    networks: [dependencies]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:8.2.3-alpine
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        cp /run/rehearsal/redis.conf /data/redis.conf;
+        cp /run/rehearsal/redis.key /data/redis.key;
+        chown redis:redis /data/redis.conf /data/redis.key;
+        chmod 600 /data/redis.key;
+        sed -i 's#tls-key-file /run/rehearsal/redis.key#tls-key-file /data/redis.key#' /data/redis.conf;
+        exec /usr/local/bin/docker-entrypoint.sh redis-server /data/redis.conf
+    volumes:
+      - rehearsal-redis:/data
+      - type: bind
+        source: ${REHEARSAL_REDIS_CONFIG_FILE:?REHEARSAL_REDIS_CONFIG_FILE is required}
+        target: /run/rehearsal/redis.conf
+        read_only: true
+      - type: bind
+        source: ${REHEARSAL_REDIS_CERT_FILE:?REHEARSAL_REDIS_CERT_FILE is required}
+        target: /run/rehearsal/redis.crt
+        read_only: true
+      - type: bind
+        source: ${REHEARSAL_REDIS_KEY_FILE:?REHEARSAL_REDIS_KEY_FILE is required}
+        target: /run/rehearsal/redis.key
+        read_only: true
+      - type: bind
+        source: ${REHEARSAL_CA_FILE:?REHEARSAL_CA_FILE is required}
+        target: /run/rehearsal/ca.crt
+        read_only: true
+    networks: [dependencies]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --tls --cacert /run/rehearsal/ca.crt -a \"$$REHEARSAL_REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    environment:
+      REHEARSAL_REDIS_PASSWORD: ${REHEARSAL_REDIS_PASSWORD:?REHEARSAL_REDIS_PASSWORD is required}
+
+  storage:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--address", ":9000"]
+    environment:
+      MINIO_ROOT_USER: ${REHEARSAL_STORAGE_ROOT_USER:?REHEARSAL_STORAGE_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${REHEARSAL_STORAGE_ROOT_PASSWORD:?REHEARSAL_STORAGE_ROOT_PASSWORD is required}
+    volumes:
+      - rehearsal-storage:/data
+      - type: bind
+        source: ${REHEARSAL_STORAGE_CERT_DIRECTORY:?REHEARSAL_STORAGE_CERT_DIRECTORY is required}
+        target: /root/.minio/certs
+        read_only: true
+    networks: [dependencies]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--insecure", "https://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  # This one-shot service is a synthetic dependency provisioner, not an app image.
+  # The application uses its separately generated least-privilege identity and HTTPS.
+  storage-bootstrap:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        until mc alias set rehearsal https://storage:9000 "$${REHEARSAL_STORAGE_ROOT_USER}" "$${REHEARSAL_STORAGE_ROOT_PASSWORD}" --insecure; do sleep 1; done;
+        mc mb --insecure --ignore-existing rehearsal/$${OBJECT_STORAGE_BUCKET};
+        mc anonymous set --insecure none rehearsal/$${OBJECT_STORAGE_BUCKET};
+        mc admin user add --insecure rehearsal "$${OBJECT_STORAGE_ACCESS_KEY}" "$${OBJECT_STORAGE_SECRET_KEY}";
+        mc admin policy attach --insecure rehearsal readwrite --user "$${OBJECT_STORAGE_ACCESS_KEY}"
+    environment:
+      REHEARSAL_STORAGE_ROOT_USER: ${REHEARSAL_STORAGE_ROOT_USER:?REHEARSAL_STORAGE_ROOT_USER is required}
+      REHEARSAL_STORAGE_ROOT_PASSWORD: ${REHEARSAL_STORAGE_ROOT_PASSWORD:?REHEARSAL_STORAGE_ROOT_PASSWORD is required}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:?OBJECT_STORAGE_BUCKET is required}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY is required}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY is required}
+    networks: [dependencies]
+    depends_on:
+      storage:
+        condition: service_healthy
+    restart: "no"
+
+networks:
+  dependencies:
+    name: certificate-platform-rehearsal-dependencies
+    external: false
+
+volumes:
+  rehearsal-postgres:
+  rehearsal-postgres-tls:
+  rehearsal-redis:
+  rehearsal-storage:
+
+secrets:
+  tls_certificate:
+    external: false
+    file: ${REHEARSAL_EDGE_CERT_FILE:?REHEARSAL_EDGE_CERT_FILE is required}
+  tls_private_key:
+    external: false
+    file: ${REHEARSAL_EDGE_KEY_FILE:?REHEARSAL_EDGE_KEY_FILE is required}

@@ -185,6 +185,54 @@ credential rotation cannot be proven by process configuration alone. Operators m
 enforce and evidence those controls before deployment. `OBJECT_STORAGE_CREATE_BUCKET`
 never provisions a production bucket.
 
+## Phase 8.5 local production-like rehearsal
+
+`compose.rehearsal.yaml` is an additive, local-only override. It is always used with
+`compose.production.yaml`; it does not replace it or relax its environment schema.
+`ops/rehearsal/run-rehearsal.ps1` creates an ignored per-run directory containing
+high-entropy synthetic credentials and a short-lived local CA. The generated
+configuration keeps `NODE_ENV=production`, `ADMIN_MFA_POLICY=REQUIRED`, HTTPS origins,
+credentialed `sslmode=verify-full` PostgreSQL, authenticated `rediss:`, HTTPS MinIO,
+and a non-default BullMQ prefix. It builds the real `web`, `api`, `worker`, and
+`migrate` Docker targets.
+
+The topology is: local browser/client -> loopback-published Nginx HTTP/HTTPS edge ->
+web -> same-site `/api/*` -> API, with worker plus private TLS PostgreSQL, TLS Redis,
+and TLS private MinIO on the isolated dependency network. Only the edge gets host
+ports; the private dependency and operator surfaces get none. The MinIO bootstrap job
+creates the rehearsal-only private bucket and a distinct application identity before
+the app services start. It is synthetic provisioning, not a production bucket policy
+claim.
+
+Run the harness only where Docker is available:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\ops\rehearsal\run-rehearsal.ps1 -KeepSafeEvidence
+node .\ops\rehearsal\completion-gate.mjs .\rehearsal-artifacts\<run>\status.json
+```
+
+The migration sequence is explicit: start only the private dependencies, run the
+`migrate` target once, inspect the migration state, rerun it, then hold node-pg-migrate's
+documented advisory lock (`7241865325823964`) and prove the second `fail`-mode command
+returns non-zero. API/web/worker are not migration runners. The harness removes its
+project containers, volumes, and networks in `finally`; omit `-KeepSafeEvidence` to
+remove the generated safe status as well. Do not retain or copy the generated env,
+CA, certificate, private key, dump, cookie, token, URL, or identifier artifacts.
+
+The completion gate accepts only a schema-versioned sanitized status artifact and
+returns `0/PASS` only when every mandatory check is observed as `PASS`; `1/FAIL` is a
+failed or malformed mandatory record and `2/BLOCKED` is an unperformed
+repository-controlled control. It never infers a pass from documentation. Real alert
+routing/on-call assignment and the other provider/operator approvals remain a separate
+production-launch gate; their absence cannot be converted into repository evidence.
+
+Rollback must identify both image revisions, run the current compatible migration
+first, assess backward schema compatibility, deploy the prior image only when that
+assessment permits it, execute edge/private readiness smoke, and then redeploy the
+current image and repeat readiness. Historical migrations are never reversed. If the
+prior image is incompatible, record `ROLLBACK_SCHEMA_INCOMPATIBLE`, retain the current
+safe deployment, and use a forward-fix/redeploy path.
+
 ### Migration and rollout boundary
 
 Migrations are an explicit, observable one-shot command:

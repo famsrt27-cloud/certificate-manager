@@ -532,3 +532,82 @@ health/metrics, storage, queue and Compose tests.
 The repository now contains explicit PostgreSQL custom-format backup and guarded isolated-restore controls, private durable-only S3 object copy/verification, ignored backup/drill artifacts and a dedicated PostgreSQL 16/MinIO Compose drill. The drill seeds synthetic tenant/template/version/asset/certificate/PDF/revocation/audit/cleanup and queue-outbox state, makes source targets unavailable, restores fresh targets and asserts tenant ownership, unchanged public identifier, revoked state, immutable issuance/template/generation relationships, asset/PDF bytes and metadata, historical signing `kid`, tenant-bound audit, durable cleanup intent, pending-delivery reconstruction and non-requeue of completed work. Redis sessions/rate limits remain deliberately unrecovered; stale non-terminal BullMQ delivery is reconstructed from PostgreSQL job/item/outbox state, while terminal work remains terminal.
 
 Provider evidence remains an operator control: private bucket policy, versioning, encryption, replication/export, lifecycle, separate backup identity, retention/deletion, off-site durability, alert routing, restore authorization and business-approved RPO/RTO. Phase 8.5 remains blocked on the production-like rehearsal, provider-injected DNS/TLS/secrets, alert ownership and approved operational values. This record does not update PR Part 4 or claim Phase 8 completion.
+
+## 18. Phase 8.5 implementation and rehearsal record
+
+The repository now has an additive `compose.rehearsal.yaml`, a local-only
+`ops/rehearsal/run-rehearsal.ps1`, and a fail-closed
+`ops/rehearsal/completion-gate.mjs`. The harness retains the actual production Docker
+targets and controls while adding isolated PostgreSQL 16, authenticated TLS Redis, and
+TLS MinIO dependencies. Generated high-entropy session/MFA/signing/database/Redis/
+object-storage values and local CA/TLS material are per-run ignored artifacts. The
+completion status contains only timestamp, revision, check name, status and stable
+reason code; it cannot contain secrets, URLs, tokens, cookies, identifiers, PII, or
+private keys.
+
+The gate has mandatory evidence for Compose/image use, explicit migration and
+idempotency, node-pg-migrate advisory-lock contention, HTTPS/public/private smoke,
+security configuration, restored-data runtime observation, PostgreSQL/Redis/storage/
+worker failure recovery, rollback/forward recovery, and independent key lifecycle.
+Missing repository evidence is `BLOCKED`; malformed or failed evidence is `FAIL`; only
+all mandatory repository checks observed as `PASS` complete that gate. Alert routing
+and named on-call ownership are external/operator launch controls: the repository owns
+the signal/ownership/runbook contract and fail-closed classification, but cannot
+fabricate the real assignment.
+
+### Executed local rehearsal evidence
+
+The final sanitized local status for sealed revision
+`d107f4c1411e0cf2600fbbc9b308504bd4e2cba1` records successful production Compose
+configuration, explicit first/idempotent migrations, visible advisory-lock contention,
+HTTPS edge and same-site API smoke, private exposure and operator surfaces, production
+security configuration, restored-data runtime verification, PostgreSQL/Redis/storage
+failure and recovery, durable PostgreSQL outbox reconciliation, key-lifecycle loading,
+rollback disposition, and forward recovery. BuildKit provenance identifies the final
+web image as
+`sha256:62453cc840fb4808e12e87c173740d330002f3d610afe5046db26a82244a5dfa`,
+built from context `.`, the repository `Dockerfile`, target `web`, and the sealed
+revision. Its layer history includes the current production web dependency layer; no
+stdin Dockerfile or temporary debug image is final evidence.
+
+The rollback candidate was the distinct retained image
+`sha256:eab578e0453d67582b1bd18ba328c036a561b30e5775e1d883f8738112f92584`
+from revision `81c9a9cc363b58dac2384dde76bb269e14830448`. Compatibility preflight rejected it
+because it predates the required production web runtime-dependency layer and therefore
+cannot satisfy the current startup/readiness contract. It was not force-started and no
+historical migration was reversed or edited. The current image was retained/redeployed,
+and readiness, edge, and same-site API smoke passed afterward. Safe rejection is the
+observed rollback result; it is not a claim that the prior runtime served traffic.
+
+This is repository-controlled local rehearsal evidence, not evidence of actual
+provider DNS/TLS, managed secrets, HA/private-network policy, RPO/RTO approval, central
+log retention, alert delivery/on-call acceptance, or provider firewall enforcement.
+Those launch controls remain blocked below. The focused rehearsal-control test must be
+reported separately from the executable rehearsal evidence if its local launcher is
+unavailable; an unavailable test environment is not promoted to a product failure.
+
+### External/provider evidence matrix
+
+| Requirement | Classification | Required launch evidence |
+| --- | --- | --- |
+| Repository Compose isolation and fail-closed parsing | PROVEN by focused repository tests | Rehearsal execution remains separate evidence. |
+| Production DNS and trusted public TLS deployment | OPERATOR-REQUIRED | Domain ownership, DNS records, certificate chain and renewal evidence. |
+| Provider PostgreSQL TLS, credentials, HA | OPERATOR-REQUIRED | Provider policy and tested connection/availability evidence. |
+| Provider Redis TLS/auth/persistence/eviction | OPERATOR-REQUIRED | Provider configuration and recovery-policy evidence. |
+| Private bucket, server-side encryption, versioning/lifecycle/replication | OPERATOR-REQUIRED | Bucket-policy and provider lifecycle evidence. |
+| Managed secret injection and separate app/backup identities | OPERATOR-REQUIRED | Approved secret-store and access-review evidence. |
+| Backup identity/retention and restore authorization | OPERATOR-REQUIRED | Approved retention and authorized restore evidence. |
+| Approved RPO/RTO | BLOCKED | Business approval has not been supplied to this repository. |
+| Central log retention/access and alert routing/on-call | BLOCKED | A destination, retention policy and accountable owner have not been supplied. |
+| Firewall/private-network enforcement | OPERATOR-REQUIRED | Provider/VPC/firewall policy and verification evidence. |
+
+Consequently, even after a successful local rehearsal, repository implementation and
+rehearsal completion must be reported separately from real production launch approval.
+The latter remains blocked until the listed external evidence and approvals exist.
+
+The 2026-09-02 final audit reran
+`tests/ops/production-rehearsal-controls.test.ts` after frozen-lockfile dependency
+restoration (`4/4` tests passed) and reran the repository completion gate against the
+sanitized final status (`PASS`). Repository Phase 8 is therefore complete and Part 5
+is safe to seal. Real production launch remains `BLOCKED`; this repository decision
+does not approve or imply production readiness without the external evidence above.

@@ -112,3 +112,29 @@ forwarded/client address fields, request bodies and tokens are not edge-log dime
 Next.js is reached only through the edge; its canonical request outcome is therefore
 represented by the edge record, while API work is represented by API JSON logs and
 metrics.
+
+## Phase 8.5 alert ownership gate
+
+The repository supplies signals and safe first diagnostics; it does not supply an
+alert destination or on-call roster. Before launch, the service owner must assign the
+following matrix in the approved incident system. No numerical threshold is invented
+here: use the approved trigger policy, or treat its absence as a launch blocker.
+
+| Signal | First diagnostic and safe recovery | Required owner |
+| --- | --- | --- |
+| Elevated 5xx | Correlate redacted edge/API request IDs; check readiness before rollback. | Application on-call |
+| Database failure | Check private readiness and provider health; do not run migrations during an outage. | Database + application on-call |
+| Redis/session failure | Check authenticated TLS Redis health; expect logout/re-login after loss. | Cache + application on-call |
+| Queue backlog/stalled/retried/failed | Compare private worker metrics with PostgreSQL job/outbox state; reconcile, never blindly replay terminal work. | Worker on-call |
+| Renderer/generation failure | Inspect stable error code and immutable generation state; retry only the approved non-terminal path. | Worker on-call |
+| Object-storage failure | Verify private bucket/provider health; do not create a public fallback or falsify PDF metadata. | Storage + application on-call |
+| Auth/rate-limit or token-tamper anomaly | Preserve redacted evidence, assess abuse, and adjust only approved controls. | Security on-call |
+| Backup/restore-test freshness | Review sanitized backup/restore status and provider evidence. | Backup owner |
+| TLS expiry | Validate deployed certificate chain and renewal path without exposing private keys. | Platform/edge owner |
+
+`alert_ownership` is an external/operator launch control. The repository contract is
+complete when this matrix, signals, safe diagnostics, escalation expectations, and the
+fail-closed launch classification exist; the repository cannot assign a real person or
+destination. Until a real alert route and named owner accept these responsibilities,
+production launch remains `BLOCKED` / `OPERATOR-REQUIRED` even when the repository
+Phase 8 completion gate passes.
