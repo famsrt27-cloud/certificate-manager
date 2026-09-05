@@ -22,6 +22,14 @@ import { PhaseFourService } from "../../src/modules/phase-four/phase-four-servic
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integrationEnabled = databaseUrl !== undefined && new URL(databaseUrl).pathname.toLowerCase().includes("test");
 const onePixelPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+const syntheticTtf = (() => {
+  const bytes = Buffer.alloc(63); bytes[1] = 1; bytes.writeUInt16BE(3, 4);
+  for (const [index, tag] of ["head", "name", "maxp"].entries()) {
+    const record = 12 + index * 16; bytes.write(tag, record, "latin1"); bytes.writeUInt32BE(60 + index, record + 8);
+    bytes.writeUInt32BE(1, record + 12); bytes[60 + index] = index + 1;
+  }
+  return bytes;
+})();
 
 describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration", () => {
   const database = createDatabase({ connectionString: databaseUrl!, maxConnections: 2 });
@@ -33,6 +41,10 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
   const csrfToken = "c".repeat(43);
   const objects = new Map<string, Uint8Array>();
   let failStorageDeletes = false;
+  let failStorageGets = false;
+  let failStoragePutAt: number | null = null;
+  let storagePutCount = 0;
+  let onStorageGet: (() => Promise<void>) | null = null;
   let app: ReturnType<typeof buildApi>;
   let service: PhaseFourService;
   let templateId = "";
@@ -65,8 +77,18 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     } as unknown as AuthenticationService;
     const audit = { write: (event: Parameters<typeof insertAuditRecord>[1]) => insertAuditRecord(database, event) };
     const storage: PrivateObjectStorage = {
-      put: async (input) => { objects.set(input.key, input.body); },
-      get: async (key) => objects.get(key) ?? Promise.reject(new Error("missing synthetic object")),
+      put: async (input) => {
+        storagePutCount += 1;
+        if (failStoragePutAt === storagePutCount) throw new Error("synthetic storage put failure");
+        objects.set(input.key, input.body);
+      },
+      get: async (key) => {
+        if (failStorageGets) throw new Error("synthetic storage read failure");
+        const bytes = objects.get(key);
+        if (bytes === undefined) throw new Error("missing synthetic object");
+        const hook = onStorageGet; onStorageGet = null; await hook?.();
+        return bytes;
+      },
       delete: async (key) => {
         if (failStorageDeletes) throw new Error("synthetic storage delete failure");
         objects.delete(key);
@@ -615,6 +637,277 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(response.status).toBe(413);
     expect(response.body.error.code).toBe("UPLOAD_TOO_LARGE");
     expect(objects.size).toBe(objectCount);
+  });
+
+  it("duplicates selected draft, published, and archived versions into independent ACTIVE templates with DRAFT v1", async () => {
+    const source = await admin(request(app.server).post("/api/admin/templates")).send({ name: `Duplicate source ${randomUUID()}` });
+    const sourceTemplateId = source.body.data.id as string;
+    const uploaded = await admin(request(app.server).post(`/api/admin/templates/${sourceTemplateId}/assets`))
+      .attach("file", onePixelPng, { filename: "duplicate.png", contentType: "image/png" });
+    const sourceAssetId = uploaded.body.data.id as string;
+    const sourceAsset = await database.selectFrom("template_assets").selectAll().where("id", "=", sourceAssetId).executeTakeFirstOrThrow();
+    const sourceBytes = Buffer.from(objects.get(sourceAsset.storage_key)!);
+    const definition = { format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+      { type: "image", x: 0, y: 0, width: 50, height: 50, asset_id: sourceAssetId },
+      { type: "signature", x: 60, y: 0, width: 50, height: 50, asset_id: sourceAssetId }
+    ] };
+    const draft = await admin(request(app.server).post(`/api/admin/templates/${sourceTemplateId}/versions`)).send({ definition });
+
+    const duplicate = async (name: string) => admin(request(app.server).post(`/api/admin/templates/${sourceTemplateId}/duplicate`))
+      .send({ source_version_id: draft.body.data.id, name });
+    const draftCopy = await duplicate(`Draft copy ${randomUUID()}`);
+    expect(draftCopy.status).toBe(201);
+    await admin(request(app.server).post(`/api/admin/templates/${sourceTemplateId}/versions/${draft.body.data.id}/publish`));
+    const publishedCopy = await duplicate(`Published copy ${randomUUID()}`);
+    expect(publishedCopy.status).toBe(201);
+    await admin(request(app.server).post(`/api/admin/templates/${sourceTemplateId}/versions/${draft.body.data.id}/archive`));
+    await admin(request(app.server).post(`/api/admin/templates/${sourceTemplateId}/archive`));
+    const archivedCopy = await duplicate(`Archived copy ${randomUUID()}`);
+    expect(archivedCopy.status).toBe(201);
+
+    for (const response of [draftCopy, publishedCopy, archivedCopy]) {
+      expect(response.body.data.template).toMatchObject({ status: "ACTIVE" });
+      expect(response.body.data.version).toMatchObject({ version: 1, status: "DRAFT", published_at: null });
+      expect(response.body.data.template.id).not.toBe(sourceTemplateId);
+      expect(response.body.data.version.template_id).toBe(response.body.data.template.id);
+      expect(response.body.data.version.asset_ids).toHaveLength(1);
+      expect(response.body.data.version.asset_ids).not.toContain(sourceAssetId);
+      const destinationAssetId = response.body.data.version.asset_ids[0] as string;
+      const destinationAsset = await database.selectFrom("template_assets").selectAll().where("id", "=", destinationAssetId)
+        .executeTakeFirstOrThrow();
+      expect(destinationAsset.template_id).toBe(response.body.data.template.id);
+      expect(destinationAsset.storage_key).not.toBe(sourceAsset.storage_key);
+      expect(destinationAsset.storage_key).toContain(`/` + response.body.data.template.id + `/`);
+      expect(Buffer.from(destinationAsset.content_sha256)).toEqual(Buffer.from(sourceAsset.content_sha256));
+      expect(destinationAsset.size_bytes).toBe(sourceAsset.size_bytes);
+      expect(destinationAsset.detected_mime_type).toBe(sourceAsset.detected_mime_type);
+      expect(Buffer.from(objects.get(destinationAsset.storage_key)!)).toEqual(sourceBytes);
+      expect(response.body.data.version.definition.elements.map((element: { asset_id?: string }) => element.asset_id))
+        .toEqual([destinationAssetId, destinationAssetId]);
+      expect((await database.selectFrom("storage_cleanup_outbox").select("id")
+        .where("object_key", "=", destinationAsset.storage_key).executeTakeFirst())).toBeUndefined();
+    }
+    expect(Buffer.from(objects.get(sourceAsset.storage_key)!)).toEqual(sourceBytes);
+    const sourceVersions = await database.selectFrom("template_versions").selectAll().where("template_id", "=", sourceTemplateId).execute();
+    expect(sourceVersions).toHaveLength(1);
+    expect(sourceVersions[0]).toMatchObject({ id: draft.body.data.id, status: "ARCHIVED" });
+    const audits = await database.selectFrom("audit_logs").selectAll().where("action", "=", "TEMPLATE_DUPLICATED")
+      .where("resource_id", "in", [draftCopy.body.data.template.id, publishedCopy.body.data.template.id,
+        archivedCopy.body.data.template.id]).execute();
+    expect(audits).toHaveLength(3);
+    expect(audits.every((audit) => audit.resource_type === "template" && audit.metadata === null)).toBe(true);
+  });
+
+  it("duplicates zero-asset definitions and rejects cross-template, cross-tenant, and injected source input", async () => {
+    const source = await admin(request(app.server).post("/api/admin/templates")).send({ name: `Zero source ${randomUUID()}` });
+    const version = await admin(request(app.server).post(`/api/admin/templates/${source.body.data.id}/versions`)).send({
+      definition: { format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [] }
+    });
+    const copy = await admin(request(app.server).post(`/api/admin/templates/${source.body.data.id}/duplicate`))
+      .send({ source_version_id: version.body.data.id, name: `Zero copy ${randomUUID()}` });
+    expect(copy.status).toBe(201); expect(copy.body.data.version.asset_ids).toEqual([]);
+    expect((await admin(request(app.server).post(`/api/admin/templates/${templateId}/duplicate`))
+      .send({ source_version_id: version.body.data.id, name: "Wrong source" })).status).toBe(404);
+    expect((await admin(request(app.server).post(`/api/admin/templates/${source.body.data.id}/duplicate`), otherOrganizationId)
+      .send({ source_version_id: version.body.data.id, name: "Foreign" })).status).toBe(404);
+    expect((await admin(request(app.server).post(`/api/admin/templates/${source.body.data.id}/duplicate`))
+      .send({ source_version_id: version.body.data.id, name: "Injected", asset_ids: [], storage_key: "private/key" })).status).toBe(400);
+  });
+
+  it("copies a referenced custom font to a new template-scoped asset and remaps only the font reference", async () => {
+    const source = await admin(request(app.server).post("/api/admin/templates")).send({ name: `Font source ${randomUUID()}` });
+    const uploaded = await admin(request(app.server).post(`/api/admin/templates/${source.body.data.id}/assets`))
+      .attach("file", syntheticTtf, { filename: "private.ttf", contentType: "font/ttf" });
+    expect(uploaded.status).toBe(201);
+    const definition = { format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+      { type: "text", text: "literal remains", x: 0, y: 0, width: 300, height: 50,
+        font: { family: "Private", asset_id: uploaded.body.data.id, size: 20 } }
+    ] };
+    const version = await admin(request(app.server).post(`/api/admin/templates/${source.body.data.id}/versions`)).send({ definition });
+    const copy = await admin(request(app.server).post(`/api/admin/templates/${source.body.data.id}/duplicate`))
+      .send({ source_version_id: version.body.data.id, name: `Font copy ${randomUUID()}` });
+    expect(copy.status).toBe(201); expect(copy.body.data.version.asset_ids).toHaveLength(1);
+    const destinationFontId = copy.body.data.version.asset_ids[0] as string;
+    expect(destinationFontId).not.toBe(uploaded.body.data.id);
+    expect(copy.body.data.version.definition.elements[0]).toMatchObject({ text: "literal remains",
+      font: { family: "Private", asset_id: destinationFontId, size: 20 } });
+    const [sourceRow, destinationRow] = await Promise.all([
+      database.selectFrom("template_assets").selectAll().where("id", "=", uploaded.body.data.id).executeTakeFirstOrThrow(),
+      database.selectFrom("template_assets").selectAll().where("id", "=", destinationFontId).executeTakeFirstOrThrow()
+    ]);
+    expect(destinationRow.storage_key).not.toBe(sourceRow.storage_key);
+    expect(destinationRow.detected_mime_type).toBe("font/ttf");
+    expect(Buffer.from(objects.get(destinationRow.storage_key)!)).toEqual(syntheticTtf);
+    expect(Buffer.from(objects.get(sourceRow.storage_key)!)).toEqual(syntheticTtf);
+  });
+
+  it("compensates all destination objects and intents when a later sequential PUT fails", async () => {
+    const context = { organizationId, actorUserId: userId, actorMembershipId: membershipId,
+      membership: null, superAdmin: false } as const;
+    const source = await service.createTemplate(context, { name: `Partial PUT source ${randomUUID()}` }, randomUUID());
+    const image = await service.uploadAsset(context, source.id, { filename: "one.png", declaredMimeType: "image/png",
+      bytes: onePixelPng }, randomUUID());
+    const font = await service.uploadAsset(context, source.id, { filename: "two.ttf", declaredMimeType: "font/ttf",
+      bytes: syntheticTtf }, randomUUID());
+    const version = await service.createVersion(context, source.id, { definition: {
+      format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+        { type: "image", x: 0, y: 0, width: 50, height: 50, opacity: 1, fit: "contain", asset_id: image.id },
+        { type: "text", text: "private font", x: 0, y: 60, width: 300, height: 50, opacity: 1,
+          align: "left", color: "#000000", font: { family: "Private", asset_id: font.id, size: 20, weight: 400 } }
+      ]
+    } }, randomUUID());
+    const beforeObjects = objects.size; const name = `Partial PUT destination ${randomUUID()}`;
+    failStoragePutAt = storagePutCount + 2;
+    try {
+      await expect(service.duplicateTemplate(context, source.id, { source_version_id: version.id, name },
+        1_024 * 1_024, randomUUID())).rejects.toBeDefined();
+    } finally {
+      failStoragePutAt = null;
+    }
+    expect(objects.size).toBe(beforeObjects);
+    expect((await database.selectFrom("certificate_templates").select("id").where("name", "=", name).executeTakeFirst()))
+      .toBeUndefined();
+    const dangling = await database.selectFrom("storage_cleanup_outbox").select("object_key")
+      .where("object_key", "like", `template-assets/${organizationId}/%`).execute();
+    expect(dangling.filter((row) => !objects.has(row.object_key))).toHaveLength(0);
+  });
+
+  it("fails closed on source object integrity/read failures and destination PUT failure without destination rows or success audit", async () => {
+    const context = { organizationId, actorUserId: userId, actorMembershipId: membershipId,
+      membership: null, superAdmin: false } as const;
+    const source = await service.createTemplate(context, { name: `Failure source ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, source.id, { filename: "failure.png", declaredMimeType: "image/png",
+      bytes: onePixelPng }, randomUUID());
+    const version = await service.createVersion(context, source.id, { definition: {
+      format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+        { type: "image", x: 0, y: 0, width: 50, height: 50, opacity: 1, fit: "contain", asset_id: asset.id }
+      ]
+    } }, randomUUID());
+    const assetRow = await database.selectFrom("template_assets").selectAll().where("id", "=", asset.id).executeTakeFirstOrThrow();
+    const attempt = async (name: string) => admin(request(app.server).post(`/api/admin/templates/${source.id}/duplicate`))
+      .send({ source_version_id: version.id, name });
+    const countNamed = (name: string) => database.selectFrom("certificate_templates").select(({ fn }) => fn.countAll().as("count"))
+      .where("name", "=", name).executeTakeFirstOrThrow();
+
+    objects.set(assetRow.storage_key, Buffer.from("substituted"));
+    const hashName = `Hash mismatch ${randomUUID()}`; expect((await attempt(hashName)).status).toBe(503);
+    expect(Number((await countNamed(hashName)).count)).toBe(0);
+    objects.set(assetRow.storage_key, onePixelPng);
+    await database.updateTable("template_assets").set({ size_bytes: String(onePixelPng.byteLength + 1) }).where("id", "=", asset.id).execute();
+    const sizeName = `Size mismatch ${randomUUID()}`; expect((await attempt(sizeName)).status).toBe(503);
+    expect(Number((await countNamed(sizeName)).count)).toBe(0);
+    await database.updateTable("template_assets").set({ size_bytes: String(onePixelPng.byteLength) }).where("id", "=", asset.id).execute();
+    failStorageGets = true;
+    const readName = `Read failure ${randomUUID()}`; expect((await attempt(readName)).status).toBe(503);
+    failStorageGets = false; expect(Number((await countNamed(readName)).count)).toBe(0);
+    failStoragePutAt = storagePutCount + 1;
+    const putName = `Put failure ${randomUUID()}`; expect((await attempt(putName)).status).toBe(500);
+    failStoragePutAt = null; expect(Number((await countNamed(putName)).count)).toBe(0);
+    const audits = await database.selectFrom("audit_logs").select("id").where("action", "=", "TEMPLATE_DUPLICATED")
+      .where("resource_id", "in", database.selectFrom("certificate_templates").select("id").where("name", "in", [hashName, sizeName, readName, putName]))
+      .execute();
+    expect(audits).toHaveLength(0);
+  });
+
+  it("keeps copied objects covered by cleanup intents when a final database transaction and immediate deletion both fail", async () => {
+    const context = { organizationId, actorUserId: userId, actorMembershipId: membershipId,
+      membership: null, superAdmin: false } as const;
+    const source = await service.createTemplate(context, { name: `Cleanup source ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, source.id, { filename: "cleanup.png", declaredMimeType: "image/png",
+      bytes: onePixelPng }, randomUUID());
+    const version = await service.createVersion(context, source.id, { definition: {
+      format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+        { type: "image", x: 0, y: 0, width: 50, height: 50, opacity: 1, fit: "contain", asset_id: asset.id }
+      ]
+    } }, randomUUID());
+    const destinationName = `Database rollback ${randomUUID()}`;
+    failStorageDeletes = true;
+    try {
+      await expect(service.duplicateTemplate(context, source.id, { source_version_id: version.id, name: destinationName },
+        1_024 * 1_024, "not-a-uuid")).rejects.toBeDefined();
+    } finally {
+      failStorageDeletes = false;
+    }
+    expect((await database.selectFrom("certificate_templates").select("id").where("name", "=", destinationName)
+      .executeTakeFirst())).toBeUndefined();
+    const cleanup = await database.selectFrom("storage_cleanup_outbox").select(["id", "object_key"])
+      .where("object_key", "like", `template-assets/${organizationId}/%`).execute();
+    const destinationCleanup = cleanup.filter((row) => objects.has(row.object_key));
+    expect(destinationCleanup).toHaveLength(1);
+    expect(destinationCleanup[0]!.object_key).not.toContain(`/${source.id}/`);
+    for (const row of destinationCleanup) {
+      objects.delete(row.object_key);
+      await database.deleteFrom("storage_cleanup_outbox").where("id", "=", row.id).execute();
+    }
+  });
+
+  it("rejects an ineligible source asset without copying storage or creating a destination", async () => {
+    const context = { organizationId, actorUserId: userId, actorMembershipId: membershipId,
+      membership: null, superAdmin: false } as const;
+    const source = await service.createTemplate(context, { name: `Ineligible duplicate ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, source.id, { filename: "archived.png", declaredMimeType: "image/png",
+      bytes: onePixelPng }, randomUUID());
+    const version = await service.createVersion(context, source.id, { definition: {
+      format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+        { type: "image", x: 0, y: 0, width: 50, height: 50, opacity: 1, fit: "contain", asset_id: asset.id }
+      ]
+    } }, randomUUID());
+    await database.updateTable("template_assets").set({ status: "ARCHIVED" }).where("id", "=", asset.id).execute();
+    const beforeObjects = objects.size; const name = `Must not exist ${randomUUID()}`;
+    const response = await admin(request(app.server).post(`/api/admin/templates/${source.id}/duplicate`))
+      .send({ source_version_id: version.id, name });
+    expect(response.status).toBe(400); expect(objects.size).toBe(beforeObjects);
+    expect((await database.selectFrom("certificate_templates").select("id").where("name", "=", name).executeTakeFirst()))
+      .toBeUndefined();
+  });
+
+  it("revalidates source asset identity and status inside the final transaction", async () => {
+    const context = { organizationId, actorUserId: userId, actorMembershipId: membershipId,
+      membership: null, superAdmin: false } as const;
+    const source = await service.createTemplate(context, { name: `TOCTOU source ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, source.id, { filename: "toctou.png", declaredMimeType: "image/png",
+      bytes: onePixelPng }, randomUUID());
+    const version = await service.createVersion(context, source.id, { definition: {
+      format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+        { type: "image", x: 0, y: 0, width: 50, height: 50, opacity: 1, fit: "contain", asset_id: asset.id }
+      ]
+    } }, randomUUID());
+    onStorageGet = async () => {
+      await database.updateTable("template_assets").set({ status: "ARCHIVED" }).where("id", "=", asset.id).execute();
+    };
+    const beforeObjects = objects.size; const name = `TOCTOU destination ${randomUUID()}`;
+    const response = await admin(request(app.server).post(`/api/admin/templates/${source.id}/duplicate`))
+      .send({ source_version_id: version.id, name });
+    expect(response.status).toBe(409);
+    expect((await database.selectFrom("certificate_templates").select("id").where("name", "=", name).executeTakeFirst()))
+      .toBeUndefined();
+    expect(objects.size).toBe(beforeObjects);
+  });
+
+  it("rejects a DRAFT source definition change during object copying instead of combining snapshots", async () => {
+    const context = { organizationId, actorUserId: userId, actorMembershipId: membershipId,
+      membership: null, superAdmin: false } as const;
+    const source = await service.createTemplate(context, { name: `Draft TOCTOU source ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, source.id, { filename: "draft-toctou.png", declaredMimeType: "image/png",
+      bytes: onePixelPng }, randomUUID());
+    const version = await service.createVersion(context, source.id, { definition: {
+      format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [
+        { type: "image", x: 0, y: 0, width: 50, height: 50, opacity: 1, fit: "contain", asset_id: asset.id }
+      ]
+    } }, randomUUID());
+    onStorageGet = async () => {
+      await service.updateVersion(context, source.id, version.id, { definition: {
+        format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: []
+      } }, randomUUID());
+    };
+    const beforeObjects = objects.size; const name = `Draft TOCTOU destination ${randomUUID()}`;
+    const response = await admin(request(app.server).post(`/api/admin/templates/${source.id}/duplicate`))
+      .send({ source_version_id: version.id, name });
+    expect(response.status).toBe(409);
+    expect((await database.selectFrom("certificate_templates").select("id").where("name", "=", name).executeTakeFirst()))
+      .toBeUndefined();
+    expect(objects.size).toBe(beforeObjects);
+    expect((await service.getVersion(organizationId, source.id, version.id)).asset_ids).toEqual([]);
   });
 
   it("enforces published definition, asset-link, and asset-content immutability in PostgreSQL", async () => {

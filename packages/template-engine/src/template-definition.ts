@@ -156,3 +156,30 @@ export const collectTemplateAssetRequirements = (definition: TemplateDefinition)
 
 export const collectTemplateAssetIds = (definition: TemplateDefinition): readonly string[] =>
   collectTemplateAssetRequirements(definition).map((requirement) => requirement.id);
+
+export const remapTemplateAssetIds = (
+  definition: TemplateDefinition,
+  assetIdMapping: ReadonlyMap<string, string>
+): TemplateDefinition => {
+  const remap = (sourceId: string): string => {
+    const destinationId = assetIdMapping.get(sourceId);
+    if (destinationId === undefined) throw new Error("Template asset mapping is incomplete");
+    return destinationId;
+  };
+  const remapped = {
+    ...definition,
+    page: { ...definition.page },
+    elements: definition.elements.map((element) => {
+      if (element.type === "image" || element.type === "signature") {
+        return { ...element, asset_id: remap(element.asset_id) };
+      }
+      if (element.type === "text") {
+        return { ...element, font: element.font.asset_id === undefined
+          ? { ...element.font }
+          : { ...element.font, asset_id: remap(element.font.asset_id) } };
+      }
+      return { ...element };
+    })
+  };
+  return TemplateDefinitionSchema.parse(remapped);
+};

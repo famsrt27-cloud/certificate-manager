@@ -11,6 +11,8 @@ const versionDraftId = "20000000-0000-4000-8000-000000000008";
 const versionPublishedId = "20000000-0000-4000-8000-000000000009";
 const versionArchivedId = "20000000-0000-4000-8000-000000000010";
 const versionClonedId = "20000000-0000-4000-8000-000000000017";
+const duplicatedTemplateId = "20000000-0000-4000-8000-000000000018";
+const duplicatedVersionId = "20000000-0000-4000-8000-000000000019";
 const imageAssetId = "20000000-0000-4000-8000-000000000011";
 const fontAssetId = "20000000-0000-4000-8000-000000000012";
 const rejectedAssetId = "20000000-0000-4000-8000-000000000013";
@@ -148,6 +150,95 @@ test("clone action is single-flight, opens the new draft, and leaves history unc
   await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toHaveValue(versionArchivedId);
   await expect(page.getByLabel("เวอร์ชันที่กำลังดู").locator("option")).toHaveCount(5);
   expect(cloneRequests).toBe(2);
+});
+
+test("duplicate-as-new-template communicates independence, is single-flight, locks version switching, and opens DRAFT v1", async ({ page }) => {
+  await routeSession(page); let duplicateRequests = 0; let releaseDuplicate: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseDuplicate = resolve; });
+  const destinationVersion = { ...version(duplicatedVersionId, 1, "DRAFT"), template_id: duplicatedTemplateId };
+  await page.route("**/api/admin/templates**", async (route) => {
+    const path = new URL(route.request().url()).pathname; const method = route.request().method();
+    if (path === `/api/admin/templates/${templateId}/duplicate`) {
+      duplicateRequests += 1;
+      expect(route.request().postDataJSON()).toEqual({ source_version_id: versionPublishedId, name: "สำเนาอิสระ" });
+      expect(route.request().headers()["x-csrf-token"]).toBe(csrfToken); await gate;
+      return fulfillJson(route, { data: { template: template(duplicatedTemplateId, "สำเนาอิสระ"), version: destinationVersion },
+        meta: { request_id: requestId } }, 201);
+    }
+    if (path === `/api/admin/templates/${duplicatedTemplateId}`) return fulfillJson(route, {
+      data: template(duplicatedTemplateId, "สำเนาอิสระ"), meta: { request_id: requestId }
+    });
+    if (path === `/api/admin/templates/${templateId}`) return fulfillJson(route, { data: template(), meta: { request_id: requestId } });
+    if (path.endsWith("/versions") && method === "GET") return fulfillJson(route, { data: path.includes(duplicatedTemplateId)
+      ? [destinationVersion] : [version(versionPublishedId, 2, "PUBLISHED"), version(versionArchivedId, 1, "ARCHIVED")],
+      meta: { request_id: requestId, next_cursor: null } });
+    if (path.endsWith("/assets")) return fulfillJson(route, { data: [], meta: { request_id: requestId, next_cursor: null } });
+    return fulfillJson(route, {}, 404);
+  });
+  await page.goto(`/admin/templates/${templateId}`);
+  const action = page.getByRole("button", { name: "ทำสำเนาเป็นเทมเพลตใหม่" });
+  await expect(action).toBeVisible(); await action.click();
+  const dialog = page.getByRole("dialog", { name: "ทำสำเนาเป็นเทมเพลตใหม่" });
+  await expect(dialog).toContainText("เทมเพลตและเวอร์ชันต้นฉบับจะไม่เปลี่ยนแปลง");
+  await dialog.getByRole("textbox", { name: "ชื่อเทมเพลตใหม่" }).fill("สำเนาอิสระ");
+  const submit = dialog.locator('button[type="submit"]'); await submit.click();
+  await expect(submit).toBeDisabled(); await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toBeDisabled();
+  await submit.click({ force: true }); expect(duplicateRequests).toBe(1); releaseDuplicate?.();
+  await expect(page).toHaveURL(new RegExp(`/admin/templates/${duplicatedTemplateId}$`));
+  await expect(page.getByText("สำเนาอิสระ").first()).toBeVisible();
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toHaveValue(duplicatedVersionId);
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู").locator("option:checked")).toHaveText("เวอร์ชัน 1 — แบบร่าง");
+});
+
+test("duplicate-as-new-template failure keeps the selected original version", async ({ page }) => {
+  await routeSession(page);
+  await page.route("**/api/admin/templates**", async (route) => {
+    const path = new URL(route.request().url()).pathname; const method = route.request().method();
+    if (path === `/api/admin/templates/${templateId}`) return fulfillJson(route, { data: template(), meta: { request_id: requestId } });
+    if (path.endsWith("/versions") && method === "GET") return fulfillJson(route, { data: [version(versionArchivedId, 1, "ARCHIVED")],
+      meta: { request_id: requestId, next_cursor: null } });
+    if (path.endsWith("/assets")) return fulfillJson(route, { data: [], meta: { request_id: requestId, next_cursor: null } });
+    if (path.endsWith("/duplicate")) return fulfillJson(route, { error: { code: "VALIDATION_FAILED",
+      message: "The request could not be processed." }, meta: { request_id: requestId } }, 400);
+    return fulfillJson(route, {}, 404);
+  });
+  await page.goto(`/admin/templates/${templateId}`); await page.getByRole("button", { name: "ทำสำเนาเป็นเทมเพลตใหม่" }).click();
+  const dialog = page.getByRole("dialog", { name: "ทำสำเนาเป็นเทมเพลตใหม่" });
+  await dialog.getByRole("button", { name: "สร้างเทมเพลตใหม่" }).click();
+  await expect(page).toHaveURL(new RegExp(`/admin/templates/${templateId}$`));
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toHaveValue(versionArchivedId);
+  await expect(page.getByText("ไม่สามารถทำสำเนาเป็นเทมเพลตใหม่ได้ กรุณาลองอีกครั้ง")).toBeVisible();
+});
+
+test("duplicate-as-new-template ignores a response after navigation leaves the source workspace", async ({ page }) => {
+  await routeSession(page); let releaseDuplicate: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseDuplicate = resolve; });
+  await page.route("**/api/admin/templates**", async (route) => {
+    const path = new URL(route.request().url()).pathname; const method = route.request().method();
+    if (path === `/api/admin/templates/${templateId}/duplicate`) {
+      await gate;
+      return fulfillJson(route, { data: { template: template(duplicatedTemplateId, "Stale copy"),
+        version: { ...version(duplicatedVersionId, 1, "DRAFT"), template_id: duplicatedTemplateId } },
+      meta: { request_id: requestId } }, 201);
+    }
+    if (path === `/api/admin/templates/${templateId}`) return fulfillJson(route, { data: template(), meta: { request_id: requestId } });
+    if (path.endsWith("/versions") && method === "GET") return fulfillJson(route, {
+      data: [version(versionPublishedId, 2, "PUBLISHED")], meta: { request_id: requestId, next_cursor: null }
+    });
+    if (path.endsWith("/assets")) return fulfillJson(route, { data: [], meta: { request_id: requestId, next_cursor: null } });
+    if (path === "/api/admin/templates") return fulfillJson(route, { data: [], meta: { request_id: requestId, next_cursor: null } });
+    return fulfillJson(route, {}, 404);
+  });
+  await page.goto(`/admin/templates/${templateId}`);
+  await page.getByRole("button", { name: "ทำสำเนาเป็นเทมเพลตใหม่" }).click();
+  const dialog = page.getByRole("dialog", { name: "ทำสำเนาเป็นเทมเพลตใหม่" });
+  await dialog.getByRole("textbox", { name: "ชื่อเทมเพลตใหม่" }).fill("Stale copy");
+  await dialog.getByRole("button", { name: "สร้างเทมเพลตใหม่" }).click();
+  await page.goto("/admin/templates");
+  await expect(page).toHaveURL(/\/admin\/templates$/);
+  releaseDuplicate?.();
+  await page.waitForTimeout(100);
+  await expect(page).toHaveURL(/\/admin\/templates$/);
 });
 
 test("draft deletion is explicit and unsaved changes are protected when switching versions", async ({ page }) => {

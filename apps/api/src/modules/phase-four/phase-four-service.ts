@@ -1,15 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import type {
-  CreateTemplateRequest, CreateTemplateVersionRequest, Template, TemplateAsset, TemplateVersion, UpdateTemplateRequest,
+  CreateTemplateRequest, CreateTemplateVersionRequest, DuplicateTemplateRequest, Template, TemplateAsset, TemplateVersion, UpdateTemplateRequest,
   UpdateTemplateVersionRequest
 } from "@certificate-platform/contracts";
 import {
   archivePublishedTemplateVersionInTransaction, archiveTemplateAssetInTransaction, archiveTemplateInTransaction,
-  armStorageCleanup, cancelStorageCleanupInTransaction, completeStorageCleanupByKey,
+  armStorageCleanup, cancelRequiredStorageCleanupInTransaction, cancelStorageCleanupInTransaction, completeStorageCleanupByKey,
   createTemplateAssetInTransaction, createTemplateInTransaction, createTemplateVersionInTransaction,
   deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateAssetsByIds,
-  findTemplateImageAssetContent, findTemplateVersion, findTemplateVersionForCloneInTransaction,
+  findTemplateDuplicationSource, findTemplateImageAssetContent, findTemplateVersion, findTemplateVersionForCloneInTransaction,
   listTemplateAssets, listTemplatePreviewVersions,
   listTemplates, listTemplateVersions, publishTemplateVersionInTransaction, runAuditedTransaction,
   updateDraftTemplateVersionInTransaction, updateTemplateInTransaction,
@@ -18,7 +18,7 @@ import {
 import type { AuditAction } from "@certificate-platform/domain";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
 import {
-  TemplateDefinitionSchema, bindTemplate, collectTemplateAssetRequirements, type TemplateDefinition
+  TemplateDefinitionSchema, bindTemplate, collectTemplateAssetRequirements, remapTemplateAssetIds, type TemplateDefinition
 } from "@certificate-platform/template-engine";
 
 import { ApplicationError } from "../../errors/application-error.js";
@@ -185,6 +185,146 @@ export class PhaseFourService {
     const version = await findTemplateVersion(this.#database, context.organizationId, templateId, result.version.id);
     if (version === undefined) return notFound();
     return mapVersion(version);
+  }
+
+  async duplicateTemplate(context: TenantAuthorizationContext, sourceTemplateId: string, input: DuplicateTemplateRequest,
+    maximumBytes: number, requestId: string) {
+    if (context.actorMembershipId === null) throw new ApplicationError("FORBIDDEN", "The requested operation is not permitted.", 403);
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) return validationFailed();
+    const initial = await findTemplateDuplicationSource(
+      this.#database, context.organizationId, sourceTemplateId, input.source_version_id, []
+    );
+    if (initial === undefined) return notFound();
+    const sourceDefinition = parseDefinition(initial.version.definition_json);
+    const requirements = collectTemplateAssetRequirements(sourceDefinition);
+    const source = await findTemplateDuplicationSource(
+      this.#database, context.organizationId, sourceTemplateId, input.source_version_id,
+      requirements.map((requirement) => requirement.id)
+    );
+    if (source === undefined) return notFound();
+    if (source.assets.length !== requirements.length) return validationFailed();
+
+    const destinationTemplateId = randomUUID();
+    const copiedAssets: Array<{
+      sourceId: string; id: string; storageKey: string; originalFilename: string; contentSha256: Buffer;
+      detectedMimeType: "image/png" | "image/jpeg" | "font/ttf" | "font/otf";
+      sizeBytes: number; widthPx: number | null; heightPx: number | null;
+    }> = [];
+    const armedKeys: string[] = [];
+    const cleanupCopiedObjects = async (): Promise<void> => {
+      for (const storageKey of armedKeys) {
+        try {
+          await this.#storage.delete(storageKey);
+          await completeStorageCleanupByKey(this.#database, context.organizationId, storageKey);
+        } catch {
+          // Keep the pre-armed cleanup intent for reconciliation when deletion is not confirmed.
+        }
+      }
+    };
+
+    try {
+      for (let index = 0; index < requirements.length; index += 1) {
+        const requirement = requirements[index]!;
+        const asset = source.assets[index];
+        if (asset === undefined || asset.id !== requirement.id || asset.status !== "ACTIVE") return validationFailed();
+        const mimeEligible = requirement.kind === "IMAGE"
+          ? asset.detected_mime_type === "image/png" || asset.detected_mime_type === "image/jpeg"
+          : asset.detected_mime_type === "font/ttf" || asset.detected_mime_type === "font/otf";
+        const expectedSize = Number(asset.size_bytes);
+        if (!mimeEligible || !Number.isSafeInteger(expectedSize) || expectedSize < 1 || expectedSize > maximumBytes) return validationFailed();
+        let bytes: Uint8Array;
+        try {
+          bytes = await this.#storage.get(asset.storage_key, maximumBytes);
+        } catch {
+          throw new ApplicationError("SERVICE_UNAVAILABLE", "The service is temporarily unavailable.", 503);
+        }
+        const contentSha256 = createHash("sha256").update(bytes).digest();
+        if (bytes.byteLength !== expectedSize || !contentSha256.equals(Buffer.from(asset.content_sha256))) {
+          throw new ApplicationError("SERVICE_UNAVAILABLE", "The service is temporarily unavailable.", 503);
+        }
+        let validated;
+        try {
+          validated = await validateTemplateAssetUpload({
+            filename: asset.original_filename, declaredMimeType: asset.detected_mime_type, bytes
+          });
+        } catch {
+          return validationFailed();
+        }
+        if (validated.originalFilename !== asset.original_filename || validated.detectedMimeType !== asset.detected_mime_type
+          || validated.widthPx !== asset.width_px
+          || validated.heightPx !== asset.height_px) return validationFailed();
+        const id = randomUUID();
+        const extension = validated.detectedMimeType === "image/png" ? "png" : validated.detectedMimeType === "image/jpeg" ? "jpg"
+          : validated.detectedMimeType === "font/ttf" ? "ttf" : "otf";
+        const storageKey = `template-assets/${context.organizationId}/${destinationTemplateId}/${id}/${randomUUID()}.${extension}`;
+        await armStorageCleanup(this.#database, { organizationId: context.organizationId, objectKey: storageKey,
+          notBefore: new Date(Date.now() + 30 * 60 * 1_000) });
+        armedKeys.push(storageKey);
+        await this.#storage.put({ key: storageKey, body: bytes, contentType: validated.detectedMimeType,
+          contentSha256Hex: contentSha256.toString("hex") });
+        copiedAssets.push({ sourceId: asset.id, id, storageKey, originalFilename: asset.original_filename,
+          contentSha256, detectedMimeType: validated.detectedMimeType, sizeBytes: expectedSize,
+          widthPx: validated.widthPx, heightPx: validated.heightPx });
+      }
+
+      const assetIdMapping = new Map(copiedAssets.map((asset) => [asset.sourceId, asset.id]));
+      const destinationDefinition = remapTemplateAssetIds(sourceDefinition, assetIdMapping);
+      const result = await runAuditedTransaction(this.#database, async (transaction) => {
+        const current = await findTemplateDuplicationSource(transaction, context.organizationId, sourceTemplateId,
+          input.source_version_id, requirements.map((requirement) => requirement.id), true);
+        const unchanged = current !== undefined
+          && JSON.stringify(parseDefinition(current.version.definition_json)) === JSON.stringify(sourceDefinition)
+          && current.assets.length === source.assets.length
+          && current.assets.every((asset, index) => {
+            const expected = source.assets[index];
+            return expected !== undefined && asset.id === expected.id && asset.template_id === expected.template_id
+              && asset.storage_key === expected.storage_key && asset.original_filename === expected.original_filename
+              && asset.status === expected.status && asset.detected_mime_type === expected.detected_mime_type
+              && asset.size_bytes === expected.size_bytes && asset.width_px === expected.width_px && asset.height_px === expected.height_px
+              && Buffer.from(asset.content_sha256).equals(Buffer.from(expected.content_sha256));
+          });
+        if (!unchanged) return { result: undefined, audit: null };
+        const templateRow = await createTemplateInTransaction(transaction, context.organizationId, input.name, destinationTemplateId);
+        for (const asset of copiedAssets) {
+          const created = await createTemplateAssetInTransaction(transaction, {
+            id: asset.id, organizationId: context.organizationId, templateId: destinationTemplateId,
+            storageKey: asset.storageKey, originalFilename: asset.originalFilename, contentSha256: asset.contentSha256,
+            detectedMimeType: asset.detectedMimeType, sizeBytes: asset.sizeBytes, widthPx: asset.widthPx,
+            heightPx: asset.heightPx, membershipId: context.actorMembershipId!
+          });
+          if (created === undefined) throw new Error("Destination template asset creation failed");
+        }
+        const versionOutcome = await createTemplateVersionInTransaction(transaction, {
+          organizationId: context.organizationId, templateId: destinationTemplateId,
+          definition: destinationDefinition as JsonValue,
+          assetRequirements: collectTemplateAssetRequirements(destinationDefinition)
+        });
+        if (versionOutcome.outcome !== "CREATED" || versionOutcome.version.version !== 1) {
+          throw new Error("Destination template version creation failed");
+        }
+        for (const storageKey of armedKeys) {
+          if (!await cancelRequiredStorageCleanupInTransaction(transaction, context.organizationId, storageKey)) {
+            throw new Error("Destination template asset cleanup intent was already claimed");
+          }
+        }
+        return {
+          result: {
+            template: mapTemplate(templateRow),
+            version: mapVersion({ ...versionOutcome.version, asset_ids: copiedAssets.map((asset) => asset.id).sort() })
+          },
+          audit: this.#auditRecord(context, "TEMPLATE_DUPLICATED", "template", destinationTemplateId, requestId)
+        };
+      });
+      if (result === undefined) {
+        await cleanupCopiedObjects();
+        return conflict();
+      }
+      return result;
+    } catch (error) {
+      await cleanupCopiedObjects();
+      if (isIntegrityViolation(error)) return conflict();
+      throw error;
+    }
   }
 
   async getVersion(organizationId: string, templateId: string, versionId: string) {

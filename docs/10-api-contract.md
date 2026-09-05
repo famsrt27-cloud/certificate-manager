@@ -253,6 +253,7 @@ All template operations require the canonical admin session and `X-Organization-
 - `GET /api/admin/templates/{templateId}` — `template:read`.
 - `PATCH /api/admin/templates/{templateId}` — `template:update`; renames a non-archived template.
 - `POST /api/admin/templates/{templateId}/archive` — `template:update`; archives the template shell without deleting historical versions or assets.
+- `POST /api/admin/templates/{templateId}/duplicate` — `template:create`; accepts exactly `{ "source_version_id": "<uuid>", "name": "<new template name>" }` and returns `201` with the new template and its initial version. The server loads the selected source version and referenced assets under the authorized organization; clients cannot submit definitions, asset IDs, storage keys or an organization ID. The destination is an independent `ACTIVE` template with `DRAFT` version 1 and newly copied private assets. The source template may be active or archived and the selected source version may be `DRAFT`, `PUBLISHED` or `ARCHIVED`.
 - `GET /api/admin/templates/{templateId}/versions` — `template:read`; cursor-paginated with `limit` 1-100 (default 50).
 - `GET /api/admin/templates/{templateId}/versions/{versionId}` — `template:read`.
 - `PATCH /api/admin/templates/{templateId}/versions/{versionId}` — `template:update`; replaces only a `DRAFT` definition and its derived asset links.
