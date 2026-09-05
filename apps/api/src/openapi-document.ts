@@ -135,6 +135,9 @@ export const openApiDocument = {
     "/api/admin/templates/{templateId}/versions/{versionId}/preview": {
       post: readOperation("template:read", TemplatePreviewResponseSchema, [pathId("templateId"), pathId("versionId")])
     },
+    "/api/admin/templates/{templateId}/versions/{versionId}/clone": {
+      post: writeOperation("template:update", TemplateVersionResponseSchema, [pathId("templateId"), pathId("versionId")], undefined, 201)
+    },
     "/api/admin/templates/{templateId}/versions/{versionId}/publish": {
       post: writeOperation("template:publish", TemplateVersionResponseSchema, [pathId("templateId"), pathId("versionId")])
     },

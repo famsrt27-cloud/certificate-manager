@@ -130,6 +130,13 @@ export const registerAdminPhaseFourRoutes = (app: FastifyInstance, options: Admi
     const data = await options.service.getVersion(context.organizationId, templateId, versionId);
     return reply.headers(noStore).send(TemplateVersionResponseSchema.parse({ data, meta: { request_id: request.id } }));
   });
+  app.post("/api/admin/templates/:templateId/versions/:versionId/clone", async (request, reply) => {
+    const context = await authorize(request, options, "template:update", true);
+    const { templateId, versionId } = parse(VersionParamsSchema, request.params);
+    if (request.body !== undefined) validationFailed();
+    const data = await options.service.cloneVersion(context, templateId, versionId, request.id);
+    return reply.status(201).headers(noStore).send(TemplateVersionResponseSchema.parse({ data, meta: { request_id: request.id } }));
+  });
   app.patch("/api/admin/templates/:templateId/versions/:versionId", async (request, reply) => {
     const context = await authorize(request, options, "template:update", true);
     const { templateId, versionId } = parse(VersionParamsSchema, request.params);

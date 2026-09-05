@@ -111,6 +111,8 @@ To change it:
 
 Existing certificates remain tied to their original version.
 
+Any existing `DRAFT`, `PUBLISHED` or `ARCHIVED` version may seed a new draft under the same active template. This is a copy-forward operation, not a rollback: the historical source version and its lifecycle timestamps remain unchanged, while the new version always starts as `DRAFT` with no publication timestamp. Every referenced asset is revalidated as active, type-compatible and owned by that same template before the new draft is created; missing or ineligible assets fail the operation without silently changing the definition.
+
 Publishing must be atomic: validate the definition, bindings, asset ownership and asset status, then set `PUBLISHED` and `published_at` in one transaction. A generation job accepts only a published version from the same organization.
 
 ## Renderer handoff contract

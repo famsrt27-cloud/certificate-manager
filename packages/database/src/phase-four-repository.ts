@@ -173,6 +173,12 @@ export const findTemplateVersion = async (database: Kysely<Database>, organizati
   return { ...version, asset_ids: assets.map((asset) => asset.asset_id) };
 };
 
+export const findTemplateVersionForCloneInTransaction = async (
+  transaction: Transaction<Database>, organizationId: string, templateId: string, versionId: string
+) => transaction.selectFrom("template_versions").select(["id", "definition_json", "status", "published_at"])
+  .where("organization_id", "=", organizationId).where("template_id", "=", templateId).where("id", "=", versionId)
+  .forUpdate().executeTakeFirst();
+
 export const listTemplateVersions = async (database: Kysely<Database>, input: TemplateChildListInput) => {
   const template = await findTemplate(database, input.organizationId, input.templateId);
   if (template === undefined) return undefined;

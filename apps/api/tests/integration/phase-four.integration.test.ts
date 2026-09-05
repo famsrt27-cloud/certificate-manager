@@ -283,6 +283,127 @@ describe.skipIf(!integrationEnabled)("Phase 4 PostgreSQL and Fastify integration
     expect(Number(after.count)).toBe(Number(before.count));
   });
 
+  it("clones draft, published, and archived versions into validated immutable drafts with scoped audit", async () => {
+    const context = {
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    } as const;
+    const template = await service.createTemplate(context, { name: `Clone source ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, template.id, {
+      filename: `clone-source-${randomUUID()}.png`, declaredMimeType: "image/png", bytes: onePixelPng
+    }, randomUUID());
+    const definition = {
+      format_version: 1 as const,
+      page: { width: 500, height: 300, unit: "px" as const },
+      elements: [{ type: "image" as const, x: 10, y: 10, width: 50, height: 50, opacity: 1,
+        asset_id: asset.id, fit: "contain" as const }]
+    };
+    const source = await service.createVersion(context, template.id, { definition }, randomUUID());
+    const draftBefore = await service.getVersion(organizationId, template.id, source.id);
+
+    const fromDraft = await admin(request(app.server)
+      .post(`/api/admin/templates/${template.id}/versions/${source.id}/clone`));
+    expect(fromDraft.status).toBe(201);
+    expect(fromDraft.body.data).toMatchObject({ template_id: template.id, version: 2, status: "DRAFT",
+      published_at: null, definition, asset_ids: [asset.id] });
+    expect(await service.getVersion(organizationId, template.id, source.id)).toEqual(draftBefore);
+
+    await service.publishVersion(context, template.id, source.id, randomUUID());
+    const publishedBefore = await service.getVersion(organizationId, template.id, source.id);
+    const fromPublished = await admin(request(app.server)
+      .post(`/api/admin/templates/${template.id}/versions/${source.id}/clone`));
+    expect(fromPublished.status).toBe(201);
+    expect(fromPublished.body.data).toMatchObject({ version: 3, status: "DRAFT", published_at: null,
+      definition, asset_ids: [asset.id] });
+    expect(await service.getVersion(organizationId, template.id, source.id)).toEqual(publishedBefore);
+
+    await service.archiveVersion(context, template.id, source.id, randomUUID());
+    const archivedBefore = await service.getVersion(organizationId, template.id, source.id);
+    const fromArchived = await admin(request(app.server)
+      .post(`/api/admin/templates/${template.id}/versions/${source.id}/clone`));
+    expect(fromArchived.status).toBe(201);
+    expect(fromArchived.body.data).toMatchObject({ version: 4, status: "DRAFT", published_at: null,
+      definition, asset_ids: [asset.id] });
+    expect(await service.getVersion(organizationId, template.id, source.id)).toEqual(archivedBefore);
+
+    const cloneAudits = await database.selectFrom("audit_logs")
+      .select(["resource_id", "resource_type", "metadata"])
+      .where("organization_id", "=", organizationId).where("action", "=", "TEMPLATE_VERSION_CLONED")
+      .where("resource_id", "in", [fromDraft.body.data.id, fromPublished.body.data.id, fromArchived.body.data.id]).execute();
+    expect(cloneAudits).toHaveLength(3);
+    expect(new Set(cloneAudits.map((audit) => audit.resource_id))).toEqual(new Set([
+      fromDraft.body.data.id, fromPublished.body.data.id, fromArchived.body.data.id
+    ]));
+    expect(cloneAudits.every((audit) => audit.resource_type === "template_version" && audit.metadata === null)).toBe(true);
+
+    const otherTemplate = await service.createTemplate(context, { name: `Wrong clone target ${randomUUID()}` }, randomUUID());
+    expect((await admin(request(app.server)
+      .post(`/api/admin/templates/${otherTemplate.id}/versions/${source.id}/clone`))).status).toBe(404);
+    expect((await admin(request(app.server)
+      .post(`/api/admin/templates/${template.id}/versions/${source.id}/clone`), otherOrganizationId)).status).toBe(404);
+    expect((await admin(request(app.server)
+      .post(`/api/admin/templates/${template.id}/versions/${source.id}/clone`).send({ definition: { elements: [] } }))).status).toBe(400);
+  });
+
+  it("fails clone closed for an ineligible source asset without creating a version or audit", async () => {
+    const context = {
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    } as const;
+    const template = await service.createTemplate(context, { name: `Invalid clone asset ${randomUUID()}` }, randomUUID());
+    const asset = await service.uploadAsset(context, template.id, {
+      filename: `invalid-clone-${randomUUID()}.png`, declaredMimeType: "image/png", bytes: onePixelPng
+    }, randomUUID());
+    const source = await service.createVersion(context, template.id, { definition: {
+      format_version: 1, page: { width: 500, height: 300, unit: "px" }, elements: [{
+        type: "image", x: 10, y: 10, width: 50, height: 50, opacity: 1, asset_id: asset.id, fit: "contain"
+      }]
+    } }, randomUUID());
+    await service.archiveAsset(context, template.id, asset.id, randomUUID());
+    const before = await database.selectFrom("template_versions").select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId).where("template_id", "=", template.id).executeTakeFirstOrThrow();
+    const auditsBefore = await database.selectFrom("audit_logs").select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId).where("action", "=", "TEMPLATE_VERSION_CLONED")
+      .executeTakeFirstOrThrow();
+
+    const response = await admin(request(app.server)
+      .post(`/api/admin/templates/${template.id}/versions/${source.id}/clone`));
+    expect(response.status).toBe(400);
+    const after = await database.selectFrom("template_versions").select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId).where("template_id", "=", template.id).executeTakeFirstOrThrow();
+    expect(Number(after.count)).toBe(Number(before.count));
+    const auditsAfter = await database.selectFrom("audit_logs").select(({ fn }) => fn.countAll().as("count"))
+      .where("organization_id", "=", organizationId).where("action", "=", "TEMPLATE_VERSION_CLONED")
+      .executeTakeFirstOrThrow();
+    expect(Number(auditsAfter.count)).toBe(Number(auditsBefore.count));
+  });
+
+  it("serializes concurrent create and clone through the existing next-version allocator", async () => {
+    const context = {
+      organizationId,
+      actorUserId: userId,
+      actorMembershipId: membershipId,
+      membership: null,
+      superAdmin: false
+    } as const;
+    const template = await service.createTemplate(context, { name: `Concurrent clone ${randomUUID()}` }, randomUUID());
+    const definition = { format_version: 1 as const, page: { width: 500, height: 300, unit: "px" as const }, elements: [] };
+    const source = await service.createVersion(context, template.id, { definition }, randomUUID());
+    const [cloned, created] = await Promise.all([
+      service.cloneVersion(context, template.id, source.id, randomUUID()),
+      service.createVersion(context, template.id, { definition }, randomUUID())
+    ]);
+    expect(new Set([cloned.version, created.version])).toEqual(new Set([2, 3]));
+    expect(cloned.id).not.toBe(created.id);
+    expect(cloned.status).toBe("DRAFT"); expect(created.status).toBe("DRAFT");
+  });
+
   it("holds referenced asset locks through publish so a concurrent archive cannot invalidate the published version", async () => {
     const context = {
       organizationId,

@@ -257,6 +257,7 @@ All template operations require the canonical admin session and `X-Organization-
 - `GET /api/admin/templates/{templateId}/versions/{versionId}` — `template:read`.
 - `PATCH /api/admin/templates/{templateId}/versions/{versionId}` — `template:update`; replaces only a `DRAFT` definition and its derived asset links.
 - `DELETE /api/admin/templates/{templateId}/versions/{versionId}` — `template:update`; deletes only a `DRAFT` version.
+- `POST /api/admin/templates/{templateId}/versions/{versionId}/clone` — `template:update`; creates a new `DRAFT` under the same template from the server-stored source definition. The source may be `DRAFT`, `PUBLISHED` or `ARCHIVED` and remains unchanged. The request has no body; source assets are revalidated for the same template before creation.
 - `POST /api/admin/templates/{templateId}/versions/{versionId}/preview` — `template:read`; validates the stored definition and active asset set, then returns a synthetic allowlist-bound data preview. It does not render or return a PDF and does not accept recipient data.
 - `POST /api/admin/templates/{templateId}/versions/{versionId}/archive` — `template:publish`; changes only `PUBLISHED` to `ARCHIVED`.
 - `POST /api/admin/templates/{templateId}/assets` — `template:asset:create`; accepts one private multipart PNG, JPEG, TTF or OTF asset.
