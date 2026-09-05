@@ -113,6 +113,12 @@ Existing certificates remain tied to their original version.
 
 Any existing `DRAFT`, `PUBLISHED` or `ARCHIVED` version may seed a new draft under the same active template. This is a copy-forward operation, not a rollback: the historical source version and its lifecycle timestamps remain unchanged, while the new version always starts as `DRAFT` with no publication timestamp. Every referenced asset is revalidated as active, type-compatible and owned by that same template before the new draft is created; missing or ineligible assets fail the operation without silently changing the definition.
 
+### Template duplication
+
+A selected `DRAFT`, `PUBLISHED` or `ARCHIVED` version may seed a new independent template in the same organization, including when the source template is archived. The destination starts as an `ACTIVE` template with exactly one `DRAFT` version 1 and no publication timestamp. Source history and lifecycle state are not copied, and the source template/version remain immutable.
+
+Only private assets referenced by the selected definition are copied. Current asset eligibility, content, size and hash validation applies; each unique source asset receives a new destination asset ID and a new private storage key scoped to the destination template. The template-engine remaps only documented image, signature and custom-font asset references and validates the resulting definition again. This operation does not provide cross-organization sharing or a shared asset library.
+
 Publishing must be atomic: validate the definition, bindings, asset ownership and asset status, then set `PUBLISHED` and `published_at` in one transaction. A generation job accepts only a published version from the same organization.
 
 ## Renderer handoff contract

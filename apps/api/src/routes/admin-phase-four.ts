@@ -1,5 +1,6 @@
 import {
   AdminOrganizationIdSchema, CreateTemplateRequestSchema, CreateTemplateVersionRequestSchema,
+  DuplicateTemplateRequestSchema, DuplicateTemplateResponseSchema,
   DeleteDraftVersionResponseSchema, TemplateAssetListResponseSchema, TemplateAssetResponseSchema,
   TemplateChildListQuerySchema, TemplateListQuerySchema, TemplateListResponseSchema, TemplatePreviewResponseSchema, TemplateResponseSchema,
   TemplateVersionListResponseSchema, TemplateVersionResponseSchema, UpdateTemplateRequestSchema,
@@ -108,6 +109,15 @@ export const registerAdminPhaseFourRoutes = (app: FastifyInstance, options: Admi
     const { templateId } = parse(TemplateParamsSchema, request.params);
     const data = await options.service.archiveTemplate(context, templateId, request.id);
     return reply.headers(noStore).send(TemplateResponseSchema.parse({ data, meta: { request_id: request.id } }));
+  });
+  app.post("/api/admin/templates/:templateId/duplicate", async (request, reply) => {
+    const context = await authorize(request, options, "template:create", true);
+    const { templateId } = parse(TemplateParamsSchema, request.params);
+    const data = await options.service.duplicateTemplate(context, templateId,
+      parse(DuplicateTemplateRequestSchema, request.body), options.templateAssetMaxBytes, request.id);
+    return reply.status(201).headers(noStore).send(DuplicateTemplateResponseSchema.parse({
+      data, meta: { request_id: request.id }
+    }));
   });
 
   app.post("/api/admin/templates/:templateId/versions", async (request, reply) => {

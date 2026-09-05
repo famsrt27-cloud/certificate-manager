@@ -13,6 +13,7 @@ describe("OpenAPI document", () => {
       "/api/admin/templates/{templateId}/versions", "/api/admin/templates/{templateId}/versions/{versionId}",
       "/api/admin/templates/{templateId}/versions/{versionId}/preview",
       "/api/admin/templates/{templateId}/versions/{versionId}/clone",
+      "/api/admin/templates/{templateId}/duplicate",
       "/api/admin/templates/{templateId}/versions/{versionId}/publish", "/api/admin/templates/{templateId}/assets",
       "/api/admin/certificates", "/api/admin/trainings/{trainingId}/certificates/generate",
       "/api/admin/certificates/{certificateId}/pdf", "/api/admin/certificates/{certificateId}/revoke",
@@ -42,6 +43,18 @@ describe("OpenAPI document", () => {
     ]);
     expect(operation).not.toHaveProperty("requestBody");
     expect(operation.responses).toHaveProperty("201");
+  });
+
+  it("documents independent template duplication without client-controlled definitions or storage", () => {
+    const operation = openApiDocument.paths["/api/admin/templates/{templateId}/duplicate"].post;
+    const requestBody = operation.requestBody!;
+    expect(operation.security).toEqual([{ adminSession: [], csrfToken: [] }]);
+    expect(operation["x-required-permission"]).toBe("template:create");
+    expect(Object.keys(requestBody.content["application/json"].schema.properties ?? {}).sort())
+      .toEqual(["name", "source_version_id"]);
+    expect(operation.responses).toHaveProperty("201");
+    expect(JSON.stringify(requestBody)).not.toMatch(/storage_key|asset_ids|definition/);
+    expect(JSON.stringify(operation)).not.toMatch(/storage_key/);
   });
 
   it("describes binary certificate redemption without storage or identifier disclosure", () => {

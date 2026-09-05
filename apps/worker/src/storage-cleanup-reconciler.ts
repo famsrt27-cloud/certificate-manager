@@ -1,8 +1,6 @@
 import {
   claimDueStorageCleanup,
-  completeStorageCleanup,
-  markStorageCleanupFailed,
-  storageObjectIsReferenced,
+  processClaimedStorageCleanup,
   type DatabaseClient
 } from "@certificate-platform/database";
 import type { PrivateObjectStorage } from "@certificate-platform/storage";
@@ -43,19 +41,12 @@ export class StorageCleanupReconciler {
     let failed = 0;
 
     for (const task of tasks) {
-      try {
-        if (await storageObjectIsReferenced(this.#database, task.objectKey)) {
-          await completeStorageCleanup(this.#database, task.id);
-          protectedCount += 1;
-          continue;
-        }
-        await this.#storage.delete(task.objectKey);
-        await completeStorageCleanup(this.#database, task.id);
-        deleted += 1;
-      } catch {
-        await markStorageCleanupFailed(this.#database, task.id, "STORAGE_DELETE_FAILED");
-        failed += 1;
-      }
+      const outcome = await processClaimedStorageCleanup(
+        this.#database, task, (objectKey) => this.#storage.delete(objectKey)
+      );
+      if (outcome === "DELETED") deleted += 1;
+      else if (outcome === "PROTECTED") protectedCount += 1;
+      else failed += 1;
     }
 
     return { claimed: tasks.length, deleted, protected: protectedCount, failed };

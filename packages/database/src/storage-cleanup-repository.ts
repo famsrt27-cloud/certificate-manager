@@ -35,6 +35,54 @@ export const cancelStorageCleanupInTransaction = async (
     .execute();
 };
 
+const lockStorageCleanupObjectInTransaction = async (
+  transaction: Transaction<Database>,
+  objectKey: string
+): Promise<void> => {
+  await sql`select pg_advisory_xact_lock(hashtextextended(${objectKey}, 1))`.execute(transaction);
+};
+
+export const cancelRequiredStorageCleanupInTransaction = async (
+  transaction: Transaction<Database>,
+  organizationId: string,
+  objectKey: string
+): Promise<boolean> => {
+  await lockStorageCleanupObjectInTransaction(transaction, objectKey);
+  const deleted = await transaction.deleteFrom("storage_cleanup_outbox")
+    .where("organization_id", "=", organizationId)
+    .where("object_key", "=", objectKey)
+    .returning("id")
+    .executeTakeFirst();
+  return deleted !== undefined;
+};
+
+export const processClaimedStorageCleanup = async <T>(
+  database: Kysely<Database>,
+  cleanup: ClaimedStorageCleanup,
+  deleteObject: (objectKey: string) => Promise<T>
+): Promise<"DELETED" | "PROTECTED" | "FAILED"> => database.transaction().execute(async (transaction) => {
+  await lockStorageCleanupObjectInTransaction(transaction, cleanup.objectKey);
+  const armed = await transaction.selectFrom("storage_cleanup_outbox").select("id")
+    .where("id", "=", cleanup.id)
+    .where("organization_id", "=", cleanup.organizationId)
+    .where("object_key", "=", cleanup.objectKey)
+    .forUpdate()
+    .executeTakeFirst();
+  if (armed === undefined) return "PROTECTED";
+  if (await storageObjectIsReferenced(transaction, cleanup.objectKey)) {
+    await completeStorageCleanup(transaction, cleanup.id);
+    return "PROTECTED";
+  }
+  try {
+    await deleteObject(cleanup.objectKey);
+  } catch {
+    await markStorageCleanupFailed(transaction, cleanup.id, "STORAGE_DELETE_FAILED");
+    return "FAILED";
+  }
+  await completeStorageCleanup(transaction, cleanup.id);
+  return "DELETED";
+});
+
 export const completeStorageCleanupByKey = async (
   database: Kysely<Database>,
   organizationId: string,

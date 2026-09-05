@@ -6,6 +6,7 @@ import {
   ProjectListResponseSchema, ProjectResponseSchema, TrainingListResponseSchema, TrainingResponseSchema,
   UpdateParticipantRequestSchema, UpdateProjectRequestSchema, UpdateTrainingRequestSchema,
   CreateTemplateRequestSchema, CreateTemplateVersionRequestSchema, DeleteDraftVersionResponseSchema,
+  DuplicateTemplateRequestSchema, DuplicateTemplateResponseSchema,
   TemplateAssetListResponseSchema, TemplateAssetResponseSchema, TemplateListResponseSchema, TemplatePreviewResponseSchema,
   TemplateResponseSchema, TemplateVersionListResponseSchema, TemplateVersionResponseSchema,
   UpdateTemplateRequestSchema, UpdateTemplateVersionRequestSchema,
@@ -47,6 +48,8 @@ const writeOperation = (permission: string, successSchema: z.ZodType, parameters
   security: stateSecurity, "x-required-permission": permission, parameters: [organizationParameter, ...parameters],
   ...(body === undefined ? {} : { requestBody: jsonRequest(body) }), responses: { ...response(status, successSchema), ...errors }
 });
+const duplicateTemplateOperation = writeOperation("template:create", DuplicateTemplateResponseSchema,
+  [pathId("templateId")], DuplicateTemplateRequestSchema, 201);
 
 export const openApiDocument = {
   openapi: "3.1.0",
@@ -121,6 +124,10 @@ export const openApiDocument = {
     },
     "/api/admin/templates/{templateId}/archive": {
       post: writeOperation("template:update", TemplateResponseSchema, [pathId("templateId")])
+    },
+    "/api/admin/templates/{templateId}/duplicate": {
+      post: { ...duplicateTemplateOperation,
+        responses: { ...duplicateTemplateOperation.responses, ...response(503, ErrorResponseSchema) } }
     },
     "/api/admin/templates/{templateId}/versions": {
       get: readOperation("template:read", TemplateVersionListResponseSchema, [pathId("templateId"), cursorParameter, limitParameter]),

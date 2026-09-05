@@ -26,6 +26,12 @@ const buildFixture = (permissions: readonly string[]) => {
   const audit = { write: vi.fn().mockResolvedValue(undefined) };
   const service = { listTemplates: vi.fn().mockResolvedValue({ data: [], nextCursor: null }),
     createTemplate: vi.fn().mockResolvedValue({ id: "00000000-0000-4000-8000-000000000005", name: "Safe", status: "ACTIVE" }),
+    duplicateTemplate: vi.fn().mockResolvedValue({
+      template: { id: "00000000-0000-4000-8000-000000000008", name: "Independent", status: "ACTIVE" },
+      version: { id: "00000000-0000-4000-8000-000000000009", template_id: "00000000-0000-4000-8000-000000000008",
+        version: 1, definition: { format_version: 1, page: { width: 100, height: 100, unit: "px" }, elements: [] },
+        asset_ids: [], status: "DRAFT", published_at: null }
+    }),
     cloneVersion: vi.fn().mockResolvedValue({ id: "00000000-0000-4000-8000-000000000007",
       template_id: "00000000-0000-4000-8000-000000000005", version: 2,
       definition: { format_version: 1, page: { width: 100, height: 100, unit: "px" }, elements: [] },
@@ -34,7 +40,7 @@ const buildFixture = (permissions: readonly string[]) => {
     phaseFour: { authentication, authorization: new OrganizationAuthorizationService(authentication, audit), service,
       templateAssetMaxBytes: 1_024 } });
   return { app, service: service as unknown as { listTemplates: ReturnType<typeof vi.fn>; createTemplate: ReturnType<typeof vi.fn>;
-    cloneVersion: ReturnType<typeof vi.fn>; publishVersion: ReturnType<typeof vi.fn> } };
+    cloneVersion: ReturnType<typeof vi.fn>; duplicateTemplate: ReturnType<typeof vi.fn>; publishVersion: ReturnType<typeof vi.fn> } };
 };
 
 describe("Phase 4 authorization and tenant abuse cases", () => {
@@ -94,6 +100,37 @@ describe("Phase 4 authorization and tenant abuse cases", () => {
     expect(response.status).toBe(201); expect(response.body.data).toMatchObject({ version: 2, status: "DRAFT", published_at: null });
     expect(fixture.service.cloneVersion).toHaveBeenCalledWith(expect.objectContaining({ organizationId }),
       "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006", expect.any(String));
+    await fixture.app.close();
+  });
+
+  it("protects duplicate-template with create permission, origin, CSRF, and a strict server-derived request", async () => {
+    const path = "/api/admin/templates/00000000-0000-4000-8000-000000000005/duplicate";
+    const body = { source_version_id: "00000000-0000-4000-8000-000000000006", name: "Independent" };
+    const unauthorized = buildFixture(["template:read"]); await unauthorized.app.ready();
+    expect((await request(unauthorized.app.server).post(path).set("x-organization-id", organizationId)
+      .set("origin", "https://admin.example.invalid").set("x-csrf-token", "c".repeat(43)).send(body)).status).toBe(403);
+    expect(unauthorized.service.duplicateTemplate).not.toHaveBeenCalled(); await unauthorized.app.close();
+
+    const fixture = buildFixture(["template:create"]); await fixture.app.ready();
+    const authorized = (operation: request.Test) => operation.set("x-organization-id", organizationId)
+      .set("origin", "https://admin.example.invalid").set("x-csrf-token", "c".repeat(43));
+    expect((await authorized(request(fixture.app.server).post(path)).send({ ...body, definition: {} })).status).toBe(400);
+    expect((await authorized(request(fixture.app.server)
+      .post("/api/admin/templates/not-a-uuid/duplicate")).send(body)).status).toBe(400);
+    expect((await authorized(request(fixture.app.server).post(path))
+      .send({ ...body, source_version_id: "not-a-uuid" })).status).toBe(400);
+    expect((await request(fixture.app.server).post(path).set("x-organization-id", organizationId)
+      .set("origin", "https://admin.example.invalid").send(body)).status).toBe(403);
+    expect((await request(fixture.app.server).post(path).set("x-organization-id", organizationId)
+      .set("origin", "https://other.example.invalid").set("x-csrf-token", "c".repeat(43)).send(body)).status).toBe(403);
+    expect(fixture.service.duplicateTemplate).not.toHaveBeenCalled();
+    const response = await authorized(request(fixture.app.server).post(path)).send(body);
+    expect(response.status).toBe(201);
+    expect(response.body.data).toMatchObject({ template: { name: "Independent", status: "ACTIVE" },
+      version: { version: 1, status: "DRAFT", published_at: null } });
+    expect(JSON.stringify(response.body)).not.toMatch(/storage_key|template-assets\//);
+    expect(fixture.service.duplicateTemplate).toHaveBeenCalledWith(expect.objectContaining({ organizationId }),
+      "00000000-0000-4000-8000-000000000005", body, 1_024, expect.any(String));
     await fixture.app.close();
   });
 });

@@ -31,6 +31,7 @@ export const TemplateVersionStatusSchema = z.enum(["DRAFT", "PUBLISHED", "ARCHIV
 export const TemplateAssetStatusSchema = z.enum(["QUARANTINED", "ACTIVE", "REJECTED", "ARCHIVED"]);
 
 export const CreateTemplateRequestSchema = z.object({ name: ResourceNameSchema }).strict();
+export const DuplicateTemplateRequestSchema = z.object({ source_version_id: z.uuid(), name: ResourceNameSchema }).strict();
 export const UpdateTemplateRequestSchema = z.object({ name: ResourceNameSchema }).strict();
 export const TemplateSchema = z.object({
   id: z.uuid(), name: ResourceNameSchema, status: RecordStatusSchema
@@ -57,6 +58,9 @@ export const TemplateVersionSchema = z.object({
   published_at: z.iso.datetime().nullable()
 });
 export const TemplateVersionResponseSchema = z.object({ data: TemplateVersionSchema, meta: RequestMetaSchema });
+export const DuplicateTemplateResponseSchema = z.object({
+  data: z.object({ template: TemplateSchema, version: TemplateVersionSchema }), meta: RequestMetaSchema
+});
 export const TemplateVersionListResponseSchema = z.object({ data: z.array(TemplateVersionSchema),
   meta: RequestMetaSchema.extend({ next_cursor: CursorSchema.nullable() }) });
 export const DeleteDraftVersionResponseSchema = z.object({ data: z.object({ deleted: z.literal(true) }), meta: RequestMetaSchema });
@@ -81,6 +85,7 @@ export const TemplatePreviewResponseSchema = z.object({
 });
 
 export type CreateTemplateRequest = z.infer<typeof CreateTemplateRequestSchema>;
+export type DuplicateTemplateRequest = z.infer<typeof DuplicateTemplateRequestSchema>;
 export type UpdateTemplateRequest = z.infer<typeof UpdateTemplateRequestSchema>;
 export type Template = z.infer<typeof TemplateSchema>;
 export type TemplateListItem = z.infer<typeof TemplateListItemSchema>;

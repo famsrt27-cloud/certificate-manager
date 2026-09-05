@@ -6,6 +6,7 @@ export {
   TemplateElementSchema,
   collectTemplateAssetIds,
   collectTemplateAssetRequirements,
+  remapTemplateAssetIds,
   type TemplateBinding,
   type TemplateDefinition,
   type TemplateElement,

@@ -21,8 +21,9 @@ export interface TemplateChildListInput {
 export const createTemplateInTransaction = async (
   transaction: Transaction<Database>,
   organizationId: string,
-  name: string
-) => transaction.insertInto("certificate_templates").values({ organization_id: organizationId, name })
+  name: string,
+  id?: string
+) => transaction.insertInto("certificate_templates").values({ organization_id: organizationId, name, ...(id === undefined ? {} : { id }) })
   .returning(["id", "name", "status", "created_at"]).executeTakeFirstOrThrow();
 
 export const createTemplate = async (database: Kysely<Database>, organizationId: string, name: string) =>
@@ -178,6 +179,31 @@ export const findTemplateVersionForCloneInTransaction = async (
 ) => transaction.selectFrom("template_versions").select(["id", "definition_json", "status", "published_at"])
   .where("organization_id", "=", organizationId).where("template_id", "=", templateId).where("id", "=", versionId)
   .forUpdate().executeTakeFirst();
+
+export const findTemplateDuplicationSource = async (
+  database: Kysely<Database>, organizationId: string, templateId: string, versionId: string,
+  assetIds: readonly string[], lock = false
+) => {
+  let templateQuery = database.selectFrom("certificate_templates").select(["id", "status"])
+    .where("organization_id", "=", organizationId).where("id", "=", templateId);
+  let versionQuery = database.selectFrom("template_versions").select(["id", "template_id", "definition_json", "status", "published_at"])
+    .where("organization_id", "=", organizationId).where("template_id", "=", templateId).where("id", "=", versionId);
+  if (lock) {
+    templateQuery = templateQuery.forUpdate();
+    versionQuery = versionQuery.forUpdate();
+  }
+  const version = await versionQuery.executeTakeFirst();
+  const template = await templateQuery.executeTakeFirst();
+  if (template === undefined || version === undefined) return undefined;
+  if (assetIds.length === 0) return { template, version, assets: [] };
+  let assetQuery = database.selectFrom("template_assets").select([
+    "id", "template_id", "storage_key", "original_filename", "content_sha256", "detected_mime_type",
+    "size_bytes", "width_px", "height_px", "status"
+  ]).where("organization_id", "=", organizationId).where("template_id", "=", templateId)
+    .where("id", "in", assetIds).orderBy("id");
+  if (lock) assetQuery = assetQuery.forUpdate();
+  return { template, version, assets: await assetQuery.execute() };
+};
 
 export const listTemplateVersions = async (database: Kysely<Database>, input: TemplateChildListInput) => {
   const template = await findTemplate(database, input.organizationId, input.templateId);
