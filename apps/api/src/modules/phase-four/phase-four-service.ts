@@ -9,7 +9,8 @@ import {
   armStorageCleanup, cancelStorageCleanupInTransaction, completeStorageCleanupByKey,
   createTemplateAssetInTransaction, createTemplateInTransaction, createTemplateVersionInTransaction,
   deleteDraftTemplateVersionInTransaction, findTemplate, findTemplateAsset, findTemplateAssetsByIds,
-  findTemplateImageAssetContent, findTemplateVersion, listTemplateAssets, listTemplatePreviewVersions,
+  findTemplateImageAssetContent, findTemplateVersion, findTemplateVersionForCloneInTransaction,
+  listTemplateAssets, listTemplatePreviewVersions,
   listTemplates, listTemplateVersions, publishTemplateVersionInTransaction, runAuditedTransaction,
   updateDraftTemplateVersionInTransaction, updateTemplateInTransaction,
   type DatabaseClient, type JsonValue, type NewAuditRecord
@@ -149,6 +150,33 @@ export class PhaseFourService {
         result: outcome,
         audit: outcome.outcome === "CREATED"
           ? this.#auditRecord(context, "TEMPLATE_VERSION_CREATED", "template_version", outcome.version.id, requestId)
+          : null
+      };
+    });
+    if (result.outcome === "NOT_FOUND") return notFound();
+    if (result.outcome === "INVALID_ASSET") return validationFailed();
+    const version = await findTemplateVersion(this.#database, context.organizationId, templateId, result.version.id);
+    if (version === undefined) return notFound();
+    return mapVersion(version);
+  }
+
+  async cloneVersion(context: TenantAuthorizationContext, templateId: string, sourceVersionId: string, requestId: string) {
+    const result = await runAuditedTransaction(this.#database, async (transaction) => {
+      const source = await findTemplateVersionForCloneInTransaction(
+        transaction, context.organizationId, templateId, sourceVersionId
+      );
+      if (source === undefined) return { result: { outcome: "NOT_FOUND" as const }, audit: null };
+      const definition = parseDefinition(source.definition_json);
+      const outcome = await createTemplateVersionInTransaction(transaction, {
+        organizationId: context.organizationId,
+        templateId,
+        definition: definition as JsonValue,
+        assetRequirements: collectTemplateAssetRequirements(definition)
+      });
+      return {
+        result: outcome,
+        audit: outcome.outcome === "CREATED"
+          ? this.#auditRecord(context, "TEMPLATE_VERSION_CLONED", "template_version", outcome.version.id, requestId)
           : null
       };
     });

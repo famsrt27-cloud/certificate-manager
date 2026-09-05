@@ -10,6 +10,7 @@ const secondTemplateId = "20000000-0000-4000-8000-000000000007";
 const versionDraftId = "20000000-0000-4000-8000-000000000008";
 const versionPublishedId = "20000000-0000-4000-8000-000000000009";
 const versionArchivedId = "20000000-0000-4000-8000-000000000010";
+const versionClonedId = "20000000-0000-4000-8000-000000000017";
 const imageAssetId = "20000000-0000-4000-8000-000000000011";
 const fontAssetId = "20000000-0000-4000-8000-000000000012";
 const rejectedAssetId = "20000000-0000-4000-8000-000000000013";
@@ -104,6 +105,49 @@ test("backend validation gates publishing and published or archived versions sta
   await page.getByRole("button", { name: "เผยแพร่เวอร์ชัน" }).click(); await expect(page.getByRole("dialog", { name: "เผยแพร่เวอร์ชัน" })).toContainText("ถูกล็อกถาวร"); await page.getByRole("dialog", { name: "เผยแพร่เวอร์ชัน" }).getByRole("button", { name: "ยืนยัน" }).click(); await expect(page.getByRole("button", { name: "บันทึกแบบร่าง" })).toHaveCount(0);
   await page.getByLabel("เวอร์ชันที่กำลังดู").selectOption(versionPublishedId); await expect(page.getByText("เวอร์ชันนี้เป็นประวัติแบบอ่านอย่างเดียว")).toBeVisible(); await page.getByRole("button", { name: "เก็บเวอร์ชันถาวร" }).click(); await page.getByRole("dialog", { name: "เก็บเวอร์ชันถาวร" }).getByRole("button", { name: "ยืนยัน" }).click(); expect(publishedArchived).toBe(true);
   await page.getByLabel("เวอร์ชันที่กำลังดู").selectOption(versionArchivedId); await expect(page.getByRole("button", { name: "เพิ่มข้อความ" })).toBeDisabled();
+});
+
+test("clone action is single-flight, opens the new draft, and leaves history unchanged on failure", async ({ page }) => {
+  await routeSession(page); let cloneRequests = 0; let releaseFirstClone: (() => void) | undefined;
+  const firstCloneGate = new Promise<void>((resolve) => { releaseFirstClone = resolve; });
+  await page.route("**/api/admin/templates**", async (route) => {
+    const path = new URL(route.request().url()).pathname; const method = route.request().method();
+    if (path === `/api/admin/templates/${templateId}`) return fulfillJson(route, { data: template(), meta: { request_id: requestId } });
+    if (path.endsWith("/versions") && method === "GET") return fulfillJson(route, { data: [
+      version(versionDraftId, 3, "DRAFT"), version(versionPublishedId, 2, "PUBLISHED"), version(versionArchivedId, 1, "ARCHIVED")
+    ], meta: { request_id: requestId, next_cursor: null } });
+    if (path.endsWith("/assets")) return fulfillJson(route, { data: [], meta: { request_id: requestId, next_cursor: null } });
+    if (path.endsWith(`/versions/${versionPublishedId}/clone`)) {
+      cloneRequests += 1; expect(route.request().postData()).toBeNull();
+      expect(route.request().headers()["x-csrf-token"]).toBe(csrfToken); await firstCloneGate;
+      return fulfillJson(route, { data: version(versionClonedId, 4, "DRAFT"), meta: { request_id: requestId } }, 201);
+    }
+    if (path.endsWith(`/versions/${versionArchivedId}/clone`)) {
+      cloneRequests += 1;
+      return fulfillJson(route, { error: { code: "VALIDATION_FAILED", message: "The request could not be processed." },
+        meta: { request_id: requestId } }, 400);
+    }
+    return fulfillJson(route, {}, 404);
+  });
+
+  await page.goto(`/admin/templates/${templateId}`);
+  await page.getByLabel("เวอร์ชันที่กำลังดู").selectOption(versionPublishedId);
+  await expect(page.getByText("สร้างแบบร่างใหม่ที่แก้ไขได้ โดยเวอร์ชันเดิมจะไม่เปลี่ยนแปลง")).toBeVisible();
+  const cloneButton = page.locator("button").filter({ hasText: /สร้างแบบร่างใหม่จากเวอร์ชันนี้|กำลังสร้างแบบร่างใหม่/ });
+  await cloneButton.click(); await expect(cloneButton).toBeDisabled();
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toBeDisabled();
+  await cloneButton.click({ force: true }); expect(cloneRequests).toBe(1);
+  releaseFirstClone?.();
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toBeEnabled();
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toHaveValue(versionClonedId);
+  await expect(page.getByText(/สร้างแบบร่างเวอร์ชัน 4 จากเวอร์ชัน 2 แล้ว/)).toBeVisible();
+
+  await page.getByLabel("เวอร์ชันที่กำลังดู").selectOption(versionArchivedId);
+  await page.getByRole("button", { name: "สร้างแบบร่างใหม่จากเวอร์ชันนี้" }).click();
+  await expect(page.getByText("ไม่สามารถสร้างแบบร่างจากเวอร์ชันนี้ได้ กรุณาตรวจสอบว่าไฟล์อ้างอิงยังพร้อมใช้งานและลองอีกครั้ง")).toBeVisible();
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู")).toHaveValue(versionArchivedId);
+  await expect(page.getByLabel("เวอร์ชันที่กำลังดู").locator("option")).toHaveCount(5);
+  expect(cloneRequests).toBe(2);
 });
 
 test("draft deletion is explicit and unsaved changes are protected when switching versions", async ({ page }) => {

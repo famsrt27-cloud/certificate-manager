@@ -12,6 +12,7 @@ describe("OpenAPI document", () => {
       "/api/admin/templates", "/api/admin/templates/{templateId}",
       "/api/admin/templates/{templateId}/versions", "/api/admin/templates/{templateId}/versions/{versionId}",
       "/api/admin/templates/{templateId}/versions/{versionId}/preview",
+      "/api/admin/templates/{templateId}/versions/{versionId}/clone",
       "/api/admin/templates/{templateId}/versions/{versionId}/publish", "/api/admin/templates/{templateId}/assets",
       "/api/admin/certificates", "/api/admin/trainings/{trainingId}/certificates/generate",
       "/api/admin/certificates/{certificateId}/pdf", "/api/admin/certificates/{certificateId}/revoke",
@@ -28,6 +29,19 @@ describe("OpenAPI document", () => {
     expect(operation["x-required-permission"]).toBe("certificate:download");
     expect(operation.responses[200].content["application/pdf"].schema).toEqual({ type: "string", format: "binary" });
     expect(JSON.stringify(operation)).not.toMatch(/storage_key|bucket|object_url|public_identifier|verification_token|sha256/i);
+  });
+
+  it("documents cloning as a bodyless tenant mutation that returns a new version", () => {
+    const operation = openApiDocument.paths["/api/admin/templates/{templateId}/versions/{versionId}/clone"].post;
+    expect(operation.security).toEqual([{ adminSession: [], csrfToken: [] }]);
+    expect(operation["x-required-permission"]).toBe("template:update");
+    expect(operation.parameters).toEqual([
+      expect.objectContaining({ name: "X-Organization-ID" }),
+      expect.objectContaining({ name: "templateId" }),
+      expect.objectContaining({ name: "versionId" })
+    ]);
+    expect(operation).not.toHaveProperty("requestBody");
+    expect(operation.responses).toHaveProperty("201");
   });
 
   it("describes binary certificate redemption without storage or identifier disclosure", () => {

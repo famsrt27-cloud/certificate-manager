@@ -26,12 +26,15 @@ const buildFixture = (permissions: readonly string[]) => {
   const audit = { write: vi.fn().mockResolvedValue(undefined) };
   const service = { listTemplates: vi.fn().mockResolvedValue({ data: [], nextCursor: null }),
     createTemplate: vi.fn().mockResolvedValue({ id: "00000000-0000-4000-8000-000000000005", name: "Safe", status: "ACTIVE" }),
-    publishVersion: vi.fn() } as unknown as PhaseFourService;
+    cloneVersion: vi.fn().mockResolvedValue({ id: "00000000-0000-4000-8000-000000000007",
+      template_id: "00000000-0000-4000-8000-000000000005", version: 2,
+      definition: { format_version: 1, page: { width: 100, height: 100, unit: "px" }, elements: [] },
+      asset_ids: [], status: "DRAFT", published_at: null }), publishVersion: vi.fn() } as unknown as PhaseFourService;
   const app = buildApi({ dependencies: { checkDatabase: vi.fn(), checkRedis: vi.fn() }, readinessTimeoutMs: 100, logger: false,
     phaseFour: { authentication, authorization: new OrganizationAuthorizationService(authentication, audit), service,
       templateAssetMaxBytes: 1_024 } });
   return { app, service: service as unknown as { listTemplates: ReturnType<typeof vi.fn>; createTemplate: ReturnType<typeof vi.fn>;
-    publishVersion: ReturnType<typeof vi.fn> } };
+    cloneVersion: ReturnType<typeof vi.fn>; publishVersion: ReturnType<typeof vi.fn> } };
 };
 
 describe("Phase 4 authorization and tenant abuse cases", () => {
@@ -59,5 +62,38 @@ describe("Phase 4 authorization and tenant abuse cases", () => {
     const response = await request(fixture.app.server).post("/api/admin/templates").set("x-organization-id", organizationId)
       .set("origin", "https://admin.example.invalid").send({ name: "Safe" });
     expect(response.status).toBe(403); expect(fixture.service.createTemplate).not.toHaveBeenCalled(); await fixture.app.close();
+  });
+
+  it("rejects clone without template edit permission and enforces origin and CSRF before service access", async () => {
+    const sourcePath = "/api/admin/templates/00000000-0000-4000-8000-000000000005/versions/00000000-0000-4000-8000-000000000006/clone";
+    const unauthorized = buildFixture(["template:read"]); await unauthorized.app.ready();
+    expect((await request(unauthorized.app.server).post(sourcePath).set("x-organization-id", organizationId)
+      .set("origin", "https://admin.example.invalid").set("x-csrf-token", "c".repeat(43))).status).toBe(403);
+    expect(unauthorized.service.cloneVersion).not.toHaveBeenCalled(); await unauthorized.app.close();
+
+    const missingCsrf = buildFixture(["template:update"]); await missingCsrf.app.ready();
+    expect((await request(missingCsrf.app.server).post(sourcePath).set("x-organization-id", organizationId)
+      .set("origin", "https://admin.example.invalid")).status).toBe(403);
+    expect(missingCsrf.service.cloneVersion).not.toHaveBeenCalled(); await missingCsrf.app.close();
+
+    const wrongOrigin = buildFixture(["template:update"]); await wrongOrigin.app.ready();
+    expect((await request(wrongOrigin.app.server).post(sourcePath).set("x-organization-id", organizationId)
+      .set("origin", "https://other.example.invalid").set("x-csrf-token", "c".repeat(43))).status).toBe(403);
+    expect(wrongOrigin.service.cloneVersion).not.toHaveBeenCalled(); await wrongOrigin.app.close();
+  });
+
+  it("accepts only an empty clone request and passes source identity from the route", async () => {
+    const fixture = buildFixture(["template:update"]); await fixture.app.ready();
+    const sourcePath = "/api/admin/templates/00000000-0000-4000-8000-000000000005/versions/00000000-0000-4000-8000-000000000006/clone";
+    const headers = (operation: request.Test) => operation.set("x-organization-id", organizationId)
+      .set("origin", "https://admin.example.invalid").set("x-csrf-token", "c".repeat(43));
+    expect((await headers(request(fixture.app.server).post(sourcePath)).send({ definition: {} })).status).toBe(400);
+    expect(fixture.service.cloneVersion).not.toHaveBeenCalled();
+
+    const response = await headers(request(fixture.app.server).post(sourcePath));
+    expect(response.status).toBe(201); expect(response.body.data).toMatchObject({ version: 2, status: "DRAFT", published_at: null });
+    expect(fixture.service.cloneVersion).toHaveBeenCalledWith(expect.objectContaining({ organizationId }),
+      "00000000-0000-4000-8000-000000000005", "00000000-0000-4000-8000-000000000006", expect.any(String));
+    await fixture.app.close();
   });
 });
